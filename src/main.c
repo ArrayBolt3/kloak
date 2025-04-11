@@ -68,6 +68,7 @@ static struct option long_options[] = {
 };
 
 TAILQ_HEAD(tailhead, entry) head;
+long prev_release_time = 0;
 
 // From string_copying manpage
 ssize_t strtcpy(char *restrict dst, const char *restrict src, size_t dsize)
@@ -88,6 +89,65 @@ ssize_t strtcpy(char *restrict dst, const char *restrict src, size_t dsize)
     if (trunc)
         errno = E2BIG;
     return trunc ? -1 : (ssize_t)slen;
+}
+
+// Inspired by https://stackoverflow.com/a/55468973/19474638
+// No, this isn't the fastest way to do it. But it's safe, and it's
+// understandable.
+int32_t safe_add(int32_t a, int32_t b) {
+    // Signed integer overflow is undefined behavior in C, thus we have to see
+    // if the addition *will* overflow before doing it. The basic idea here is
+    // simple:
+    //
+    // if (a + b < INT32_MIN || a + b > INT32_MAX) { don't do the additon }
+    //
+    // Obviously this won't in C because an overflow would occur if we did
+    // that, so instead we have to "cheat" and do "half" of the addition, then
+    // check if doing the other half will cause problems. We want to avoid
+    // overflow *and* underflow, so there are two different ways we can do the
+    // operation:
+    //
+    // * If b is POSITIVE, we'll end up with a value *larger* than a after the
+    //   addition, thus:
+    //   * a + b overflowing can be thought of like this; we start at 0, we
+    //     add a, then we add b, and we get a value larger than INT32_MAX.
+    //     That means we can go backwards - if we start with INT32_MAX,
+    //     subtract a, and then subtract b, we'll get a value smaller than 0.
+    //   * We can't do both subtractions in this operation, since that could
+    //     cause an underflow, but what we can do is a comparison. We subtract
+    //     b from INT32_MAX, then check if a is bigger than the remainder or
+    //     not. If it bigger, then subtracting it from the remainder would
+    //     result in a value less than zero, meaning adding a and b would
+    //     overflow.
+    // * if b is NEGATIVE, we'll end up with a value *smaller* than a after
+    //   the addition, thus:
+    //   * a + b underflowing can be thought of like this; we start at 0, we
+    //     add a, we add b, and we get a value lower than INT32_MIN. That
+    //     means we can go backwards - if we start with INT32_MIN, subtract a,
+    //     and then subtract b, we'll get a value larger than 0. (Remember,
+    //     subtracting a negative number from a number gives you a bigger
+    //     number.)
+    //   * We can't do both subtractions in this operation, since that could
+    //     cause an overflow, but we can do a comparison. We subtract b (which
+    //     is negative) from INT32_MIN, and get a bigger number as a result.
+    //     Then, we check if a is lower than the remainder from our last
+    //     subtraction. If it is, subtracting it too would result in a value
+    //     greater than zero, meaning adding a and b would underflow.
+    //
+    // This function implements saturating arithmetic - if adding two numbers
+    // would overflow, we return the largest possible number, and if adding
+    // them would underflow, we return the smallest possible number.
+
+    if (b >= 0) {
+        if (a > (INT32_MAX - b)) {
+            return INT32_MAX;
+        }
+    } else {
+        if (a < (INT32_MIN - b)) {
+            return INT32_MIN;
+        }
+    }
+    return a + b;
 }
 
 void cleanup() {
@@ -296,14 +356,154 @@ void emit_event(struct entry *e) {
     }
 }
 
+void buffer_event(long current_time, long random_delay, long lower_bound, struct input_event ev, int device_index) {
+    struct entry *n1;
+
+    n1 = malloc(sizeof(struct entry));
+    if (n1 == NULL) {
+        panic("Failed to allocate memory for entry");
+    }
+    n1->time = current_time + random_delay;
+    n1->iev = ev;
+    n1->device_index = device_index;
+    TAILQ_INSERT_TAIL(&head, n1, entries);
+
+    // Keep track of the previous scheduled release time
+    prev_release_time = n1->time;
+
+    if (verbose) {
+        printf("Buffered event at time: %ld. Device: %d,  Type: %*d,  "
+               "Code: %*d,  Value: %*d,  Scheduled delay: %*ld ms \n",
+               n1->time, device_index, 3, n1->iev.type, 5, n1->iev.code, 5, n1->iev.value,
+               4, random_delay);
+        if (lower_bound > 0) {
+            printf("Lower bound raised to: %*ld ms\n", 4, lower_bound);
+        }
+    }
+}
+
+void sched_rel_mouse_event(struct input_event ev, long lower_bound, int device_index) {
+    long current_time = 0;
+    long random_delay = 0;
+    struct entry *n1;
+    bool bail_loop = false;
+    bool x_event_in_queue = false;
+    bool y_event_in_queue = false;
+
+    current_time = current_time_ms();
+
+    // check for an empty queue first
+    n1 = TAILQ_LAST(&head, tailhead);
+    if (n1 == NULL) {
+        random_delay = random_between(lower_bound, max_delay);
+        buffer_event(current_time, random_delay, lower_bound, ev, device_index);
+        return;
+    }
+
+    // dig through the queue, starting from the end and moving towards the
+    // start
+    do {
+        if (n1->iev.type != EV_REL && n1->iev.type != EV_SYN) {
+            break;
+        }
+        if (n1->iev.type == EV_REL) {
+            if (n1->iev.code == REL_X)
+                x_event_in_queue = true;
+            else if (n1->iev.code == REL_Y)
+                y_event_in_queue = true;
+
+            switch (n1->iev.code) {
+            case REL_X:
+            case REL_Y:
+            case REL_HWHEEL:
+            case REL_WHEEL:
+            case REL_WHEEL_HI_RES:
+            case REL_HWHEEL_HI_RES:
+                if (ev.code == n1->iev.code) {
+                    n1->iev.value = safe_add(ev.value, n1->iev.value);
+                    return;
+                }
+                break;
+            default:
+                // Not a code we want to handle, bail
+                bail_loop = true;
+                break;
+            }
+        }
+        n1 = TAILQ_PREV(n1, tailhead, entries);
+    } while (n1 != NULL && !bail_loop);
+
+    // if all else fails, buffer the event normally
+    if ((ev.code == REL_X && y_event_in_queue) || (ev.code == REL_Y && x_event_in_queue)) {
+        random_delay = lower_bound;
+    } else {
+        random_delay = random_between(lower_bound, max_delay);
+    }
+    buffer_event(current_time, random_delay, lower_bound, ev, device_index);
+}
+
+void sched_abs_mouse_event(struct input_event ev, long lower_bound, int device_index) {
+    long current_time = 0;
+    long random_delay = 0;
+    struct entry *n1;
+    bool bail_loop = false;
+    bool x_event_in_queue = false;
+    bool y_event_in_queue = false;
+
+    current_time = current_time_ms();
+
+    // check for an empty queue first
+    n1 = TAILQ_LAST(&head, tailhead);
+    if (n1 == NULL) {
+        random_delay = random_between(lower_bound, max_delay);
+        buffer_event(current_time, random_delay, lower_bound, ev, device_index);
+        return;
+    }
+
+    // dig through the queue, starting from the end and moving towards the
+    // start
+    do {
+        if (n1->iev.type != EV_ABS && n1->iev.type != EV_SYN) {
+            break;
+        }
+        if (n1->iev.type == EV_ABS) {
+            if (n1->iev.code == ABS_X)
+                x_event_in_queue = true;
+            else if (n1->iev.code == ABS_Y)
+                y_event_in_queue = true;
+            switch (n1->iev.code) {
+            case ABS_X:
+            case ABS_Y:
+                if (ev.code == n1->iev.code) {
+                    n1->iev.value = ev.value;
+                    return;
+                }
+                break;
+            default:
+                // Not a code we want to handle, bail
+                bail_loop = true;
+                break;
+            }
+        }
+        n1 = TAILQ_PREV(n1, tailhead, entries);
+    } while (n1 != NULL && !bail_loop);
+
+    // if all else fails, buffer the event normally
+    if ((ev.code == ABS_X && y_event_in_queue) || (ev.code == ABS_Y && x_event_in_queue)) {
+        random_delay = lower_bound;
+    } else {
+        random_delay = random_between(lower_bound, max_delay);
+    }
+    buffer_event(current_time, random_delay, lower_bound, ev, device_index);
+}
+
 void main_loop() {
     long int err;
-    long prev_release_time = 0;
     long current_time = 0;
     long lower_bound = 0;
     long random_delay = 0;
     struct input_event ev;
-    struct entry *n1, *np;
+    struct entry *np;
 
     // initialize the rescue state
     int rescue_state[MAX_RESCUE_KEYS];
@@ -373,35 +573,76 @@ void main_loop() {
                 // preserves event order and bounds the maximum delay
                 lower_bound = min(max(prev_release_time - current_time, 0), max_delay);
 
-                // syn events are not delayed
+                printf("TYPE: %d  CODE: %d\n", ev.type, ev.code);
+
+                // syn events are not delayed, but we don't allow duplicated
+                // to pile up
                 if (ev.type == EV_SYN) {
+                    // TODO: We probably should be handling SYN_DROPPED
+                    // specially.
+                    struct entry *end_entry = TAILQ_LAST(&head, tailhead);
+                    if (end_entry != NULL && end_entry->iev.type == EV_SYN)
+                        continue;
                     random_delay = lower_bound;
+                // Handle mouse events properly, see
+                // https://forums.whonix.org/t/better-mouse-obfuscation/21445
+                // for context.
+                //
+                // There are A LOT of different pointing device movement
+                // codes, many of which only apply to more-or-less esoteric
+                // devices like 3d mice, pens, and gaming equipment. We will
+                // only concern ourselves with those events that are generally
+                // used in a semi-typical desktop computing scenario, those
+                // being:
+                //
+                // * REL_X: Horizontal relative mouse movement.
+                // * REL_Y: Vertical relative mouse movement.
+                // * REL_HWHEEL: Horizontal scroll.
+                // * REL_WHEEL: Vertical scroll.
+                // * REL_WHEEL_HI_RES: Vertical scroll but fancy, I guess
+                // * REL_HWHEEL_HI_RES: Horizontal scroll but fancy, I guess
+                // * ABS_X: Horizontal absolute mouse movement (this is common
+                //   with tablet-like devices, including the virtual devices
+                //   used for "mouse integration" under VirtualBox and QEMU)
+                // * ABS_Y: Vertical absolute mouse movement
+                //
+                // Everything else we will ignore - people using art and
+                // gaming equipment probably will need to turn kloak off
+                // before using it anyway to avoid horrible lag. We
+                // intentionally ignore touchscreen "tap" events because those
+                // are more like keypresses from an anonymization standpoint,
+                // and we stay far away from weird codes like REL_MISC (which
+                // apparently is sometimes used for brightness keys?!
+                // https://bbs.archlinux.org/viewtopic.php?id=200304)
+                } else if (ev.type == EV_REL) {
+                    switch (ev.code) {
+                    case REL_X:
+                    case REL_Y:
+                    case REL_HWHEEL:
+                    case REL_WHEEL:
+                    case REL_WHEEL_HI_RES:
+                    case REL_HWHEEL_HI_RES:
+                        sched_rel_mouse_event(ev, lower_bound, k);
+                        continue;
+                    default:
+                        random_delay = random_between(lower_bound, max_delay);
+                        break;
+                    }
+                } else if (ev.type == EV_ABS) {
+                    switch (ev.code) {
+                    case ABS_X:
+                    case ABS_Y:
+                        sched_abs_mouse_event(ev, lower_bound, k);
+                        continue;
+                    default:
+                        random_delay = random_between(lower_bound, max_delay);
+                        break;
+                    }
                 } else {
                     random_delay = random_between(lower_bound, max_delay);
                 }
 
-                // Buffer the event
-                n1 = malloc(sizeof(struct entry));
-                if (n1 == NULL) {
-                    panic("Failed to allocate memory for entry");
-                }
-                n1->time = current_time + random_delay;
-                n1->iev = ev;
-                n1->device_index = k;
-                TAILQ_INSERT_TAIL(&head, n1, entries);
-
-                // Keep track of the previous scheduled release time
-                prev_release_time = n1->time;
-
-                if (verbose) {
-                    printf("Buffered event at time: %ld. Device: %d,  Type: %*d,  "
-                           "Code: %*d,  Value: %*d,  Scheduled delay: %*ld ms \n",
-                           n1->time, k, 3, n1->iev.type, 5, n1->iev.code, 5, n1->iev.value,
-                           4, random_delay);
-                    if (lower_bound > 0) {
-                        printf("Lower bound raised to: %*ld ms\n", 4, lower_bound);
-                    }
-                }
+                buffer_event(current_time, random_delay, lower_bound, ev, k);
             }
         }
     }
