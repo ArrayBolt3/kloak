@@ -4,6 +4,10 @@
  */
 
 /*
+ * kloak.c - Core kloak executable. Grabs input devices, buffers their input,
+ * and sends input device data to the Wayland compositor via an unprivileged
+ * adapter process.
+ *
  * NOTES FOR DEVELOPERS:
  * - Use signed arithmetic wherever possible. Any form of integer
  *   over/underflow is dangerous here, thus kloak has -ftrapv enabled and thus

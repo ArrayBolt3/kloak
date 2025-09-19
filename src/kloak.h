@@ -3,11 +3,6 @@
  * See the file COPYING for copying conditions.
  */
 
-/*
- * TODO: Move most of the includes from kloak.c to here; right now this is a
- * very non-portable header file.
- */
-
 /*********************************/
 /* static defines, do not change */
 /*********************************/
