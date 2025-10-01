@@ -42,6 +42,9 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "kloak-wl.h"
 
@@ -132,6 +135,7 @@ static void self_sandbox(void) {
   rlim_t fd_idx = 0;
   pid_t wait_ret = 0;
   int wait_status = 0;
+  int map_fd = 0;
 
   /*
    * Don't allow us to regain any privileges we drop by executing something
@@ -278,11 +282,126 @@ static void self_sandbox(void) {
    * process into the new sandbox! We have to fork(), let the parent die, and
    * continue all work in the child to fully enter the sandbox.
    */
-  if (unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC
+  /*if (unshare(CLONE_NEWUSER | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC
     | CLONE_NEWPID | CLONE_NEWUTS | CLONE_SYSVSEM | CLONE_NEWCGROUP
-    | CLONE_NEWTIME) == -1) {
+    | CLONE_NEWTIME) == -1) {*/
+  if (unshare(CLONE_NEWUSER) == -1) {
     fprintf(stderr,
       "FATAL ERROR: Could not enter unshare sandbox: %s\n", strerror(errno));
+    exit(1);
+  }
+
+  /*
+   * Set up UID/GID mappings so that UID/GID 1 inside our user namespace maps
+   * to the UIG and GID of the kloakwl user. Unfortunately rather than giving
+   * us simple APIs to set mappings, Linux chose to implement the mapping
+   * mechanism as files under /proc, so we get to deal with logs of "fun" file
+   * IO here.
+   *
+   * TODO: This is broken for multiple reasons:
+   *
+   * - We can't access /proc/self/setgroups at this point, because it is owned
+   *   by the root user because the process was launched by root. We've
+   *   changed our user ID and group ID to kloakwl already, so we've locked
+   *   ourselves out of modifying this (and uid_map and gid_map).
+   * - Once we call unshare(), we no longer have control of the parent
+   *   namespace, thus we cannot create arbitrary UID/GID mappings. The only
+   *   mapping we're allowed to create is one that maps a UID in our namespace
+   *   to whatever our effective UID was when we created the namespace.
+   *   Because we can't change our UID/GID to kloakwl before writing to these
+   *   files, we're going to be root when doing these writes, and that means
+   *   we're only allowed to map a UID within our namespace to the root user
+   *   outside of our namespace. But we don't want to map to the root user
+   *   outside the namespace, that defeats most of the point of using a user
+   *   namespace here in the first place!
+   *
+   * What we're going to have to do is fork off a child process, then set up
+   * the mappings in the parent. There are a couple of ways to do that -
+   * either we can use standard fork() and then use IPC to coordinate the
+   * setting up of the namespace and the UID/GID. Or, we can use clone2() so
+   * that the child is placed in the namespace immediately, have the child
+   * SIGSTOP themselves immediately after startup, then set up the mappings in
+   * the parent and SIGCONT the child when we're done. The latter sounds more
+   * attractive, but clone2() gives insanely fine-grained control over the
+   * aspects of the child process, meaning we have to do things like allocate
+   * the child's stack manually (?!) and whatnot. More research will be needed
+   * to determine how exactly to do this safely.
+   */
+  map_fd = open("/proc/self/setgroups", O_WRONLY);
+  if (map_fd == -1) {
+    fprintf(stderr, "FATAL ERROR: Could not open /proc/self/setgroups: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (dprintf(map_fd, "deny\n") == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not write to /proc/self/setgroups: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (close(map_fd) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not close /proc/self/setgroups: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  map_fd = open("/proc/self/gid_map", O_WRONLY);
+  if (map_fd == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not open /proc/self/gid_map: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (dprintf(map_fd, "%d %d %d\n", 0, 1000, 1) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not write GID mapping to /proc/self/gid_map: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (close(map_fd) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not close /proc/self/gid_map: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  map_fd = open("/proc/self/uid_map", O_WRONLY);
+  if (map_fd == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not open /proc/self/uid_map: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (dprintf(map_fd, "%d %d %d\n", 0, 1000, 1) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not write UID mapping to /proc/self/uid_map: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (close(map_fd) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not close /proc/self/uid_map: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+
+  /*
+   * TODO: Remove this line once user namespace things are working right.
+   */
+  exit(0);
+
+  /*
+   * Set our UID and GID to 1, which we have now set up to map to kloakwl.
+   */
+  if (setresgid(1, 1, 1) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not change group to 'kloakwl' mapped group: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (setresuid(1, 1, 1) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not change user to 'kloakwl' mapped user: %s\n",
+      strerror(errno));
     exit(1);
   }
 
@@ -297,8 +416,8 @@ static void self_sandbox(void) {
   }
 
   /*
-   * Unmount /proc, we don't need it and may as well get it out of our mount
-   * namespace.
+   * Unmount /proc, we don't need it anymore and may as well get it out of our
+   * mount namespace.
    */
   if (umount("/proc") == -1 && errno != EINVAL && errno != ENOENT) {
     fprintf(stderr,
@@ -308,12 +427,12 @@ static void self_sandbox(void) {
   }
 
   /*
-   * Mount a tiny, empty, read-only tmpfs to /tmp. This will hide the contents
-   * of /tmp from the process and give us a safe place to pivot root into.
+   * Mount a tiny empty, tmpfs to /tmp. This will hide the contents of /tmp
+   * from the process and give us a safe place to pivot root into.
    */
   if (mount("newroot", "/tmp", "tmpfs",
-    MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOSYMFOLLOW,
-    "size=4k,mode=100") == -1) {
+    MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOSYMFOLLOW,
+    "size=16k,mode=700") == -1) {
     fprintf(stderr,
       "FATAL ERROR: Could not set up safe chroot zone: %s\n", strerror(errno));
     exit(1);
@@ -321,6 +440,26 @@ static void self_sandbox(void) {
   if (chdir("/tmp") == -1) {
     fprintf(stderr,
       "FATAL ERROR: Could not chdir to safe chroot zone: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (mkdir("/tmp/dev", 0600) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not create temporary /dev directory: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (mkdir("/tmp/dev/shm", 0600) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not create temporary /dev/shm directory: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+  if (mount("/dev/shm", "/tmp/dev/shm", NULL,
+    MS_BIND | MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOSYMFOLLOW,
+    NULL) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not bind-mount /dev/shm to temporary /dev/shm location: %s\n",
       strerror(errno));
     exit(1);
   }
@@ -449,4 +588,11 @@ int main(int argc, char **argv) {
 
   self_sandbox();
   fprintf(stderr, "Made it!\n");
+
+  int testfd = shm_open("/whatever", O_RDWR | O_CREAT, 0600);
+  if (testfd == -1) {
+    fprintf(stderr, "FATAL ERROR: Could not open shared memory object: %s\n",
+      strerror(errno));
+    exit(1);
+  }
 }
