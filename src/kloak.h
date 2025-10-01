@@ -36,23 +36,6 @@
 /*******************/
 
 /*
- * Defines an XDG runtime dir and Wayland socket. The two can be concatenated
- * together with a slash between to form the full path to the socket.
- */
-struct wayland_socket_info {
-  char *xdg_runtime_dir;
-  char *wayland_socket;
-};
-
-/*
- * Defines a process on the system by its PID and "comm" name.
- */
-struct process_info {
-  char *pid_str;
-  char *comm;
-};
-
-/*
  * Defines a libinput device on the system by its device ointer and file name.
  * Intended for use in a doubly-linked list.
  */
@@ -248,7 +231,7 @@ static void safe_closedir(DIR *dirp);
  * specified buffer. applayer_random_init must be called before this function
  * will behave as intended.
  */
-static void read_random(char * buf, ssize_t len);
+static void read_random(char *buf, ssize_t len);
 
 /*
  * Populates a string with a number of random characters in the set [a-zA-Z].
@@ -290,7 +273,7 @@ static bool check_screen_touch(struct output_geometry scr1,
  * the active displays. The function detects if there are gaps between the
  * displays and aborts the program if so.
  */
-static void recalc_global_space(struct disp_state * state);
+static void recalc_global_space(struct disp_state *param_state);
 
 /*
  * Converts a set of coordinates in global compositor space to a set of
@@ -324,11 +307,6 @@ static void draw_block(uint32_t * pixbuf, int32_t offset, int32_t x, int32_t y,
   int32_t layer_width, int32_t layer_height, int32_t rad, bool crosshair);
 
 /*
- */
-static void draw_block(uint32_t * pixbuf, int32_t offset, int32_t x, int32_t y,
-  int32_t layer_width, int32_t layer_height, int32_t rad, bool crosshair);
-
-/*
  * Parse an option parameter as an unsigned integer. Returns a signed integer
  * between 0 and INT32_MAX.
  */
@@ -351,7 +329,7 @@ static int32_t sleep_ms(int64_t ms);
  * Allocates a formatted string and returns a ointer to it. It is the caller's
  * responsibility to free this when it is no longer in use.
  */
-static char *sgenprintf(char *str, ...);
+static char *sgenprintf(const char *str, ...);
 
 /*
  * Looks up a key code in the key table.
@@ -453,7 +431,7 @@ static void draw_frame(struct drawable_layer *layer);
  * it with the compositor.
  */
 static struct drawable_layer *allocate_drawable_layer(
-  struct disp_state *state, struct wl_output *output);
+  struct disp_state *param_state, struct wl_output *output);
 
 /*
  * Damages the specified region of the specified surface. Takes the same
@@ -470,7 +448,7 @@ static void damage_surface_enh(struct wl_surface *surface, int32_t x,
  * isn't one already queued, and update a queued mouse movement event to
  * reflect the current virtual cursor position otherwise.
  */
-static struct input_packet * update_virtual_cursor();
+static struct input_packet * update_virtual_cursor(void);
 
 /*
  * Processes a libinput event, sending emulated input to the compositor as

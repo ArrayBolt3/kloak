@@ -1,3 +1,84 @@
+commit 32bfd01c5d2d965140d266865138c53cc46fc74c
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Sep 28 17:13:02 2025 -0400
+
+    re-generate man pages (generated using "genmkfile manpages")
+
+commit 8e73416a0b3e4cea8e5df393bf45d4e822952dfc
+Merge: 2875e07 50077c3
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Sun Sep 28 17:04:15 2025 -0400
+
+    Merge remote-tracking branch 'ArrayBolt3/arraybolt3/trixie'
+
+commit 50077c31319f201897ceba84af8fa7a8de149fbd
+Author: Aaron Rainbolt <arraybolt3@ubuntu.com>
+Date:   Sun Sep 28 15:18:20 2025 -0500
+
+    Try to fix apparmor installation issues
+
+commit a3b44ac890df6b7f3f3a517574adf7367243ce3e
+Author: Aaron Rainbolt <arraybolt3@ubuntu.com>
+Date:   Sun Sep 28 14:04:18 2025 -0500
+
+    Change default escape key combo to KEY_RIGHTSHIFT,KEY_ESCAPE
+
+commit 2875e0758b36d0cb921c9ba4741648e9bb30f2a0
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Sep 26 09:35:49 2025 +0000
+
+    bumped changelog version
+
+commit 66ea62b2cc4d0632726aa8eb806231d6bff740c2
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Sep 26 04:36:11 2025 -0400
+
+    remove trailing space
+
+commit f8b4ea8c34cbc5579f46f89be5047faa75ee0b71
+Merge: 140e34c 3510885
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Sep 26 04:34:07 2025 -0400
+
+    Merge remote-tracking branch 'ArrayBolt3/arraybolt3/trixie'
+
+commit 3510885cd50b7fd29ac195dc1c377d03b1037f0c
+Author: Aaron Rainbolt <arraybolt3@ubuntu.com>
+Date:   Thu Sep 25 00:03:46 2025 -0500
+
+    Finish hardening and warning mitigation
+
+commit 140e34c2361107f9ca638741f0e069a1df23f7ad
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 22 17:31:59 2025 +0000
+
+    bumped changelog version
+
+commit 17c1c8fc28aecd0166dedb541518e50cf3b227d1
+Merge: 0997da8 d269452
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Mon Sep 22 13:10:32 2025 -0400
+
+    Merge remote-tracking branch 'ArrayBolt3/arraybolt3/trixie'
+
+commit d2694525df040312fe8c015017227ff65529b806
+Author: Aaron Rainbolt <arraybolt3@ubuntu.com>
+Date:   Sun Sep 21 23:53:51 2025 -0500
+
+    Add additional hardening and warning flags, start restructuring code to comply with new flags
+
+commit 33ea3f87763be9682b1276aceee04eba70184632
+Author: Aaron Rainbolt <arraybolt3@ubuntu.com>
+Date:   Sat Sep 20 22:15:06 2025 -0500
+
+    Fix dubious syntax, improve startup timing, avoid spamming log when no compositor is found
+
+commit 0997da8baa4f66eef439946afdc2fdfa88ca9cd1
+Author: Patrick Schleizer <adrelanos@whonix.org>
+Date:   Fri Sep 19 18:12:23 2025 +0000
+
+    bumped changelog version
+
 commit 9927e7079e24a6c3c2433e08ee12de553c84f999
 Merge: d0ca972 5f473f0
 Author: Patrick Schleizer <adrelanos@whonix.org>
