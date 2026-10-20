@@ -1260,7 +1260,8 @@ static void registry_handle_global_remove(void *data,
         if (layer->pixbuf != NULL) {
           assert(should_draw_cursor);
           assert(layer->size >= 0);
-          munmap(layer->pixbuf, (size_t)(layer->size));
+          munmap(layer->pixbuf,
+            (size_t)(layer->size) * MAX_UNRELEASED_FRAMES);
         }
         if (layer->shm_pool != NULL) {
           assert(should_draw_cursor);
@@ -1584,6 +1585,10 @@ static void layer_surface_configure(void *data,
   }
   layer->shm_pool = wl_shm_create_pool(param_state->shm, shm_fd,
     layer->size * MAX_UNRELEASED_FRAMES);
+  /* wl_shm_create_pool dups the fd, so close our copy -- otherwise every
+   * configure leaks one fd. (Tearing down the PREVIOUS mapping/pool on a
+   * re-configure is buffer-lifecycle-sensitive and left to the maintainers.) */
+  safe_close(shm_fd);
 
   zeroed_region = wl_compositor_create_region(param_state->compositor);
   wl_region_add(zeroed_region, 0, 0, 0, 0);
@@ -1675,8 +1680,8 @@ static void draw_frame(struct drawable_layer *layer) {
     damage_surface_enh(layer->surface,
       layer->last_drawn_cursor_x - CURSOR_RADIUS,
       layer->last_drawn_cursor_y - CURSOR_RADIUS,
-      layer->last_drawn_cursor_x + CURSOR_RADIUS + 1,
-      layer->last_drawn_cursor_y + CURSOR_RADIUS + 1);
+      2 * CURSOR_RADIUS + 1,
+      2 * CURSOR_RADIUS + 1);
   }
   if (cursor_is_on_layer) {
     /* Draw crosshairs at the pointer location */
@@ -1684,8 +1689,8 @@ static void draw_frame(struct drawable_layer *layer) {
       scr_coord.x, scr_coord.y, layer->width, layer->height, CURSOR_RADIUS,
       true);
     damage_surface_enh(layer->surface, scr_coord.x - CURSOR_RADIUS,
-      scr_coord.y - CURSOR_RADIUS, scr_coord.x + CURSOR_RADIUS + 1,
-      scr_coord.y + CURSOR_RADIUS + 1);
+      scr_coord.y - CURSOR_RADIUS, 2 * CURSOR_RADIUS + 1,
+      2 * CURSOR_RADIUS + 1);
   }
 
   wl_buffer_add_listener(buffer, &buffer_listener, NULL);
@@ -2455,7 +2460,9 @@ static void handle_inotify_events(void) {
     rem_len -= struct_len;
     assert(rem_len >= 0);
 
-    if (strncmp(ie->name, "event", strlen("event")) == 0) {
+    /* A zero-length record (e.g. IN_Q_OVERFLOW) carries no name -- ie->name is
+     * one past this entry, so reading it would be out of bounds. Skip it. */
+    if (ie->len > 0 && strncmp(ie->name, "event", strlen("event")) == 0) {
       if (ie->mask & IN_CREATE) {
         attach_input_device(ie->name);
       } else {
@@ -2855,6 +2862,7 @@ static void parse_cli_args(int argc, char **argv) {
 int main(int argc, char **argv) {
   ssize_t i = 0;
   const char *env_val = NULL;
+  int poll_ret = 0;
 
   /*
    * BIG FAT WARNING: Do not attempt to build kloak with NDEBUG defined. Many
@@ -2940,7 +2948,10 @@ int main(int argc, char **argv) {
       }
       wl_display_flush_safe(state.display);
 
-      if (poll(ev_fds, POLL_FD_COUNT, calc_poll_timeout()) == -1) {
+      do {
+        poll_ret = poll(ev_fds, POLL_FD_COUNT, calc_poll_timeout());
+      } while (poll_ret == -1 && errno == EINTR);
+      if (poll_ret == -1) {
         fprintf(stderr, "FATAL ERROR: 'poll' errored out: %s\n",
           strerror(errno));
         exit(1);
@@ -2995,7 +3006,10 @@ int main(int argc, char **argv) {
         libinput_event_destroy(li_event);
       }
 
-      if (poll(ev_fds, POLL_FD_COUNT - 1, -1) == -1) {
+      do {
+        poll_ret = poll(ev_fds, POLL_FD_COUNT - 1, -1);
+      } while (poll_ret == -1 && errno == EINTR);
+      if (poll_ret == -1) {
         fprintf(stderr, "FATAL ERROR: 'poll' errored out: %s\n",
           strerror(errno));
         exit(1);
