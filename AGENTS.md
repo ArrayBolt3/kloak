@@ -85,3 +85,9 @@ Do not enable the following checks:
 
 Any messages that are printed by `cppcheck` when run as specified above must
 be either fixed or silenced, as appropriate.
+
+## Tests
+
+Comprehensive tests for this package are too high-volume for human review and
+live in the AI-maintained dist-ai repo, not here
+(https://github.com/org-ai-assisted/dist-ai).
