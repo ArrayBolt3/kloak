@@ -406,7 +406,10 @@ static void randname(char *buf, ssize_t len) {
     if (randchar < ALPHABET_LEN) {
       randchar += ASCII_UPPERCASE_START;
     } else {
-      randchar += ASCII_LOWERCASE_START;
+      /* Map the [ALPHABET_LEN, 2*ALPHABET_LEN) bucket down to [0, ALPHABET_LEN)
+       * before shifting into 'a'..'z'; adding the base alone overshoots past
+       * 'z' into punctuation / high bytes. */
+      randchar += (ASCII_LOWERCASE_START - ALPHABET_LEN);
     }
     buf[i] = randchar;
   }
@@ -904,6 +907,12 @@ static bool parse_uint31_arg(const char *val, int base, int32_t *out) {
   if (*val == '\0') {
     return false;
   }
+  /* strtoul silently accepts a leading sign (negating modulo 2^64) and skips
+   * leading whitespace, so a negative string can parse to a small in-range
+   * value; reject both for this unsigned-only parser. */
+  if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
+    return false;
+  }
   errno = 0;
   val_int = strtoul(val, &val_endchar, base);
   if (errno == ERANGE) {
@@ -927,6 +936,12 @@ static bool parse_uint32_arg(const char *val, int base, uint32_t *out) {
     return false;
   }
   if (*val == '\0') {
+    return false;
+  }
+  /* strtoul silently accepts a leading sign (negating modulo 2^64) and skips
+   * leading whitespace, so a negative string can parse to a small in-range
+   * value; reject both for this unsigned-only parser. */
+  if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
     return false;
   }
   errno = 0;
@@ -1349,8 +1364,13 @@ static void kb_handle_keymap(void *data,
 static void kb_handle_enter(__attribute__((unused)) void *data,
   __attribute__((unused)) struct wl_keyboard *kb,
   __attribute__((unused)) uint32_t serial,
-  __attribute__((unused)) struct wl_surface *surface, struct wl_array *keys) {
-  wl_array_release(keys);
+  __attribute__((unused)) struct wl_surface *surface,
+  __attribute__((unused)) struct wl_array *keys) {
+  /* No-op, like the other wl_keyboard handlers. The wl_array passed here is
+   * owned by libwayland (its data is borrowed from the message buffer, with
+   * alloc == 0); wl_array_release() would free() that borrowed pointer, an
+   * invalid free. */
+  ;
 }
 
 static void kb_handle_leave(__attribute__((unused)) void *data,
@@ -2435,7 +2455,7 @@ static void handle_inotify_events(void) {
     rem_len -= struct_len;
     assert(rem_len >= 0);
 
-    if (strncmp(ie->name, "event", strlen("event") + 1) == 0) {
+    if (strncmp(ie->name, "event", strlen("event")) == 0) {
       if (ie->mask & IN_CREATE) {
         attach_input_device(ie->name);
       } else {
