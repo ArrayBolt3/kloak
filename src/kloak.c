@@ -1809,8 +1809,18 @@ static struct input_packet * update_virtual_cursor(void) {
         assert(prev_cursor_y < INT32_MAX && prev_cursor_y >= 0);
         prev_scr_coord = abs_coord_to_screen_local_coord(
           (int32_t)(prev_cursor_x), (int32_t)(prev_cursor_y));
+        if (!prev_scr_coord.valid || !state.layers[prev_scr_coord.output_idx]) {
+          /* Okay, that didn't end up being sane after all, try the next
+           * screen. */
+          continue;
+        }
         break;
       }
+    }
+    if (!prev_scr_coord.valid || !state.layers[prev_scr_coord.output_idx]) {
+      /* An attempt at making things sane failed, therefore bail out and don't
+       * create any new input_packet. */
+      return NULL;
     }
   }
 
@@ -1933,6 +1943,8 @@ static struct input_packet * update_virtual_cursor(void) {
   scr_coord = abs_coord_to_screen_local_coord((int32_t)(cursor_x),
     (int32_t)(cursor_y));
 
+  assert(prev_scr_coord.valid);
+  assert(scr_coord.valid);
   if (should_draw_cursor) {
     state.layers[prev_scr_coord.output_idx]->frame_pending = true;
     state.layers[scr_coord.output_idx]->frame_pending = true;
