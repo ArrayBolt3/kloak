@@ -406,7 +406,10 @@ static void randname(char *buf, ssize_t len) {
     if (randchar < ALPHABET_LEN) {
       randchar += ASCII_UPPERCASE_START;
     } else {
-      randchar += ASCII_LOWERCASE_START;
+      /* Map the [ALPHABET_LEN, 2*ALPHABET_LEN) bucket down to [0, ALPHABET_LEN)
+       * before shifting into 'a'..'z'; adding the base alone overshoots past
+       * 'z' into punctuation / high bytes. */
+      randchar += (ASCII_LOWERCASE_START - ALPHABET_LEN);
     }
     buf[i] = randchar;
   }
@@ -904,6 +907,12 @@ static bool parse_uint31_arg(const char *val, int base, int32_t *out) {
   if (*val == '\0') {
     return false;
   }
+  /* strtoul silently accepts a leading sign (negating modulo 2^64) and skips
+   * leading whitespace, so a negative string can parse to a small in-range
+   * value; reject both for this unsigned-only parser. */
+  if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
+    return false;
+  }
   errno = 0;
   val_int = strtoul(val, &val_endchar, base);
   if (errno == ERANGE) {
@@ -927,6 +936,12 @@ static bool parse_uint32_arg(const char *val, int base, uint32_t *out) {
     return false;
   }
   if (*val == '\0') {
+    return false;
+  }
+  /* strtoul silently accepts a leading sign (negating modulo 2^64) and skips
+   * leading whitespace, so a negative string can parse to a small in-range
+   * value; reject both for this unsigned-only parser. */
+  if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
     return false;
   }
   errno = 0;
@@ -1245,7 +1260,8 @@ static void registry_handle_global_remove(void *data,
         if (layer->pixbuf != NULL) {
           assert(should_draw_cursor);
           assert(layer->size >= 0);
-          munmap(layer->pixbuf, (size_t)(layer->size));
+          munmap(layer->pixbuf,
+            (size_t)(layer->size) * MAX_UNRELEASED_FRAMES);
         }
         if (layer->shm_pool != NULL) {
           assert(should_draw_cursor);
@@ -1349,8 +1365,13 @@ static void kb_handle_keymap(void *data,
 static void kb_handle_enter(__attribute__((unused)) void *data,
   __attribute__((unused)) struct wl_keyboard *kb,
   __attribute__((unused)) uint32_t serial,
-  __attribute__((unused)) struct wl_surface *surface, struct wl_array *keys) {
-  wl_array_release(keys);
+  __attribute__((unused)) struct wl_surface *surface,
+  __attribute__((unused)) struct wl_array *keys) {
+  /* No-op, like the other wl_keyboard handlers. The wl_array passed here is
+   * owned by libwayland (its data is borrowed from the message buffer, with
+   * alloc == 0); wl_array_release() would free() that borrowed pointer, an
+   * invalid free. */
+  ;
 }
 
 static void kb_handle_leave(__attribute__((unused)) void *data,
@@ -1564,6 +1585,10 @@ static void layer_surface_configure(void *data,
   }
   layer->shm_pool = wl_shm_create_pool(param_state->shm, shm_fd,
     layer->size * MAX_UNRELEASED_FRAMES);
+  /* wl_shm_create_pool dups the fd, so close our copy -- otherwise every
+   * configure leaks one fd. (Tearing down the PREVIOUS mapping/pool on a
+   * re-configure is buffer-lifecycle-sensitive and left to the maintainers.) */
+  safe_close(shm_fd);
 
   zeroed_region = wl_compositor_create_region(param_state->compositor);
   wl_region_add(zeroed_region, 0, 0, 0, 0);
@@ -1655,8 +1680,8 @@ static void draw_frame(struct drawable_layer *layer) {
     damage_surface_enh(layer->surface,
       layer->last_drawn_cursor_x - CURSOR_RADIUS,
       layer->last_drawn_cursor_y - CURSOR_RADIUS,
-      layer->last_drawn_cursor_x + CURSOR_RADIUS + 1,
-      layer->last_drawn_cursor_y + CURSOR_RADIUS + 1);
+      2 * CURSOR_RADIUS + 1,
+      2 * CURSOR_RADIUS + 1);
   }
   if (cursor_is_on_layer) {
     /* Draw crosshairs at the pointer location */
@@ -1664,8 +1689,8 @@ static void draw_frame(struct drawable_layer *layer) {
       scr_coord.x, scr_coord.y, layer->width, layer->height, CURSOR_RADIUS,
       true);
     damage_surface_enh(layer->surface, scr_coord.x - CURSOR_RADIUS,
-      scr_coord.y - CURSOR_RADIUS, scr_coord.x + CURSOR_RADIUS + 1,
-      scr_coord.y + CURSOR_RADIUS + 1);
+      scr_coord.y - CURSOR_RADIUS, 2 * CURSOR_RADIUS + 1,
+      2 * CURSOR_RADIUS + 1);
   }
 
   wl_buffer_add_listener(buffer, &buffer_listener, NULL);
@@ -2435,7 +2460,9 @@ static void handle_inotify_events(void) {
     rem_len -= struct_len;
     assert(rem_len >= 0);
 
-    if (strncmp(ie->name, "event", strlen("event") + 1) == 0) {
+    /* A zero-length record (e.g. IN_Q_OVERFLOW) carries no name -- ie->name is
+     * one past this entry, so reading it would be out of bounds. Skip it. */
+    if (ie->len > 0 && strncmp(ie->name, "event", strlen("event")) == 0) {
       if (ie->mask & IN_CREATE) {
         attach_input_device(ie->name);
       } else {
@@ -2467,10 +2494,14 @@ static void parse_esc_key_str(const char *esc_key_str) {
   char *orig_key_str_copy = esc_key_str_copy;
   char *root_token = NULL;
   const char *sub_token = NULL;
-  size_t i = 0;
+  size_t idx = 0;
   size_t j = 0;
 
-  for (i = 0; ((root_token = strsep(&esc_key_str_copy, ",")) != NULL); i++) {
+  /* esc_key_list_len is a global that persists across calls (parse_cli_args
+   * calls this once per -k), so index the just-added slot by esc_key_list_len
+   * - 1, never a per-call counter -- otherwise a second -k overwrites slot 0
+   * and leaves the new slot uninitialised. */
+  while ((root_token = strsep(&esc_key_str_copy, ",")) != NULL) {
     if (root_token[0] == '\0' ) {
       fprintf(stderr,
         "FATAL ERROR: Empty key name specified in escape key list!\n");
@@ -2478,15 +2509,16 @@ static void parse_esc_key_str(const char *esc_key_str) {
     }
 
     esc_key_list_len++;
+    idx = esc_key_list_len - 1;
     esc_key_list = safe_reallocarray(esc_key_list, esc_key_list_len,
       sizeof(uint32_t *));
     esc_key_sublist_len = safe_reallocarray(esc_key_sublist_len,
       esc_key_list_len, sizeof(size_t));
     active_esc_key_list = safe_reallocarray(active_esc_key_list,
       esc_key_list_len, sizeof(bool));
-    esc_key_list[i] = NULL;
-    esc_key_sublist_len[i] = 0;
-    active_esc_key_list[i] = false;
+    esc_key_list[idx] = NULL;
+    esc_key_sublist_len[idx] = 0;
+    active_esc_key_list[idx] = false;
 
     for (j = 0; ((sub_token = strsep(&root_token, "|")) != NULL); j++)  {
       if (sub_token[0] == '\0') {
@@ -2495,11 +2527,11 @@ static void parse_esc_key_str(const char *esc_key_str) {
         exit(1);
       }
 
-      esc_key_sublist_len[i]++;
-      esc_key_list[i] = safe_reallocarray(esc_key_list[i],
-        esc_key_sublist_len[i], sizeof(uint32_t));
-      esc_key_list[i][j] = lookup_keycode(sub_token);
-      if (esc_key_list[i][j] == 0) {
+      esc_key_sublist_len[idx]++;
+      esc_key_list[idx] = safe_reallocarray(esc_key_list[idx],
+        esc_key_sublist_len[idx], sizeof(uint32_t));
+      esc_key_list[idx][j] = lookup_keycode(sub_token);
+      if (esc_key_list[idx][j] == 0) {
         fprintf(stderr, "FATAL ERROR: Unrecognized Key name '%s'!\n",
           sub_token);
         exit(1);
@@ -2830,6 +2862,7 @@ static void parse_cli_args(int argc, char **argv) {
 int main(int argc, char **argv) {
   ssize_t i = 0;
   const char *env_val = NULL;
+  int poll_ret = 0;
 
   /*
    * BIG FAT WARNING: Do not attempt to build kloak with NDEBUG defined. Many
@@ -2915,7 +2948,10 @@ int main(int argc, char **argv) {
       }
       wl_display_flush_safe(state.display);
 
-      if (poll(ev_fds, POLL_FD_COUNT, calc_poll_timeout()) == -1) {
+      do {
+        poll_ret = poll(ev_fds, POLL_FD_COUNT, calc_poll_timeout());
+      } while (poll_ret == -1 && errno == EINTR);
+      if (poll_ret == -1) {
         fprintf(stderr, "FATAL ERROR: 'poll' errored out: %s\n",
           strerror(errno));
         exit(1);
@@ -2970,7 +3006,10 @@ int main(int argc, char **argv) {
         libinput_event_destroy(li_event);
       }
 
-      if (poll(ev_fds, POLL_FD_COUNT - 1, -1) == -1) {
+      do {
+        poll_ret = poll(ev_fds, POLL_FD_COUNT - 1, -1);
+      } while (poll_ret == -1 && errno == EINTR);
+      if (poll_ret == -1) {
         fprintf(stderr, "FATAL ERROR: 'poll' errored out: %s\n",
           strerror(errno));
         exit(1);

@@ -25,3 +25,11 @@ cppcheck:
 
 codeql-cpp:
   build-command: "bash build.sh"
+
+dist-ai-tests:
+  ## kloak-tests (usr/share/kloak-tests in org-ai-assisted/dist-ai) CBMC-proves
+  ## and unit-tests the pure arithmetic of src/kloak.c via kloak's KLOAK_FUZZING
+  ## seam. cbmc proves the invariants; gcc + the wayland/libinput/libevdev/
+  ## xkbcommon dev headers + wayland-scanner (libwayland-bin) compile and link
+  ## the harness exactly as kloak builds; pkg-config locates them.
+  apt-packages: "python3 cbmc gcc libc6-dev libwayland-bin libwayland-dev libinput-dev libevdev-dev libxkbcommon-dev pkg-config"
