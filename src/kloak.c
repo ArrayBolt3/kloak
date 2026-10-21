@@ -968,6 +968,11 @@ static int32_t sleep_ms(int64_t ms) {
   return 0;
 }
 
+/* GCC issues a false-positive warning if the rslt_len check catches a -1
+ * return from vsnprintf. Why is not known, but the code is known to be
+ * good. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
 static char *sgenprintf(const char *str, ...) {
   char *rslt = NULL;
   int rslt_len = 0;
@@ -975,13 +980,14 @@ static char *sgenprintf(const char *str, ...) {
   va_list extra_args;
 
   va_start(extra_args, str);
-  rslt_len = vsnprintf(NULL, 0, str, extra_args) + 1;
+  rslt_len = vsnprintf(NULL, 0, str, extra_args);
   va_end(extra_args);
-  if (rslt_len == -1) {
+  if (rslt_len <= -1) {
     fprintf(stderr,
       "FATAL ERROR: String processing issue: %s\n", strerror(errno));
     exit(1);
   }
+  rslt_len++; // for the terminating null byte
   rslt = safe_calloc(1, (size_t)(rslt_len));
   va_start(extra_args, str);
   rslt_writelen = vsnprintf(rslt, (size_t)(rslt_len), str, extra_args);
@@ -990,6 +996,7 @@ static char *sgenprintf(const char *str, ...) {
   assert(rslt_writelen == rslt_len - 1);
   return rslt;
 }
+#pragma GCC diagnostic pop
 
 static uint32_t lookup_keycode(const char *name) {
   struct key_name_value *p = NULL;
