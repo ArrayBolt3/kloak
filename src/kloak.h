@@ -198,6 +198,7 @@ struct disp_state {
   uint32_t output_names[MAX_SCREEN_COUNT];
   struct zxdg_output_manager_v1 *xdg_output_manager;
   struct zxdg_output_v1 *xdg_outputs[MAX_SCREEN_COUNT];
+  bool xdg_output_reconfig_flags[MAX_SCREEN_COUNT];
   struct output_geometry *output_geometries[MAX_SCREEN_COUNT];
   struct output_geometry *pending_output_geometries[MAX_SCREEN_COUNT];
   int32_t global_space_width;

@@ -1250,6 +1250,7 @@ static void registry_handle_global_remove(void *data,
         param_state->xdg_outputs[i] = NULL;
         free(param_state->pending_output_geometries[i]);
         param_state->pending_output_geometries[i] = NULL;
+        free(param_state->output_geometries[i]);
         param_state->output_geometries[i] = NULL;
         if (layer->surface != NULL) {
           assert(should_draw_cursor);
@@ -1459,18 +1460,40 @@ static void wl_output_handle_mode(__attribute__((unused)) void *data,
 
 static void wl_output_info_done(void *data, struct wl_output *output) {
   struct disp_state *param_state = data;
+  bool should_sync_geometries = true;
+  ssize_t i = 0;
 
-  for (ssize_t i = 0; i < MAX_SCREEN_COUNT; i++) {
+  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
     if (param_state->outputs[i] == output) {
-      struct output_geometry *geometry = param_state->pending_output_geometries[i];
-
-      if (geometry->x == 0 && geometry->y == 0 && geometry->width == 0
-        && geometry->height == 0)
-        return;
-      param_state->output_geometries[i] = geometry;
-      recalc_global_space(param_state);
+      param_state->xdg_output_reconfig_flags[i] = false;
       break;
     }
+  }
+
+  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+    if (param_state->xdg_output_reconfig_flags[i]) {
+      should_sync_geometries = false;
+      break;
+    }
+  }
+
+  if (should_sync_geometries) {
+    for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+      struct output_geometry *geometry = param_state->pending_output_geometries[i];
+      if (geometry == NULL) {
+        continue;
+      }
+      if (param_state->output_geometries[i] == NULL) {
+        param_state->output_geometries[i] = safe_calloc(1,
+          sizeof(struct output_geometry));
+      }
+      param_state->output_geometries[i]->x = geometry->x;
+      param_state->output_geometries[i]->y = geometry->y;
+      param_state->output_geometries[i]->width = geometry->width;
+      param_state->output_geometries[i]->height = geometry->height;
+    }
+
+    recalc_global_space(param_state);
   }
 }
 
@@ -1501,6 +1524,7 @@ static void xdg_output_handle_logical_position(void *data,
     if (param_state->xdg_outputs[i] == xdg_output) {
       param_state->pending_output_geometries[i]->x = x;
       param_state->pending_output_geometries[i]->y = y;
+      param_state->xdg_output_reconfig_flags[i] = true;
       break;
     }
   }
@@ -1515,6 +1539,7 @@ static void xdg_output_handle_logical_size(void *data,
     if (param_state->xdg_outputs[i] == xdg_output) {
       param_state->pending_output_geometries[i]->width = width;
       param_state->pending_output_geometries[i]->height = height;
+      param_state->xdg_output_reconfig_flags[i] = true;
       break;
     }
   }
@@ -1522,6 +1547,9 @@ static void xdg_output_handle_logical_size(void *data,
 
 static void xdg_output_info_done(__attribute__((unused)) void *data,
   __attribute__((unused)) struct zxdg_output_v1 *xdg_output) {
+  /* NOTE: This function is intentionally not used. Compositors no longer send
+   * xdg_output::done, and instead send wl_output::done. See:
+   * https://wayland.app/protocols/xdg-output-unstable-v1#zxdg_output_v1:event:done */
   ;
 }
 
