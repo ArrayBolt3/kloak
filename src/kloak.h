@@ -607,6 +607,13 @@ static void applayer_inotify_init(void);
 static void applayer_poll_init(void);
 
 /*
+ * Checks if an option has been specified twice. Terminates the program if so,
+ * marks the option as having been seen otherwise.
+ */
+static void check_dup_arg_and_mark(int opt, int *seen_opts,
+  ssize_t *seen_opts_pos_ptr);
+
+/*
  * Parses command-line arguments.
  */
 static void parse_cli_args(int argc, char **argv);

@@ -406,9 +406,6 @@ static void randname(char *buf, ssize_t len) {
     if (randchar < ALPHABET_LEN) {
       randchar += ASCII_UPPERCASE_START;
     } else {
-      /* Map the [ALPHABET_LEN, 2*ALPHABET_LEN) bucket down to [0, ALPHABET_LEN)
-       * before shifting into 'a'..'z'; adding the base alone overshoots past
-       * 'z' into punctuation / high bytes. */
       randchar += (ASCII_LOWERCASE_START - ALPHABET_LEN);
     }
     buf[i] = randchar;
@@ -907,9 +904,6 @@ static bool parse_uint31_arg(const char *val, int base, int32_t *out) {
   if (*val == '\0') {
     return false;
   }
-  /* strtoul silently accepts a leading sign (negating modulo 2^64) and skips
-   * leading whitespace, so a negative string can parse to a small in-range
-   * value; reject both for this unsigned-only parser. */
   if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
     return false;
   }
@@ -938,9 +932,6 @@ static bool parse_uint32_arg(const char *val, int base, uint32_t *out) {
   if (*val == '\0') {
     return false;
   }
-  /* strtoul silently accepts a leading sign (negating modulo 2^64) and skips
-   * leading whitespace, so a negative string can parse to a small in-range
-   * value; reject both for this unsigned-only parser. */
   if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
     return false;
   }
@@ -1362,15 +1353,16 @@ static void kb_handle_keymap(void *data,
   param_state->virt_kb_keymap_set = true;
 }
 
+/* Note that the keys array MUST NOT be freed. Wayland clients are responsible
+ * for closing fds sent by the server
+ * (https://gitlab.freedesktop.org/wayland/wayland/-/work_items/184#note_696613),
+ * but the server is responsible for freeing arrays it allocated itself
+ * (https://gitlab.freedesktop.org/wlroots/wlroots/-/blob/1e7baefe96606bc7beb7d60f6c69eb209ece832b/types/seat/wlr_seat_keyboard.c#L433-457). */
 static void kb_handle_enter(__attribute__((unused)) void *data,
   __attribute__((unused)) struct wl_keyboard *kb,
   __attribute__((unused)) uint32_t serial,
   __attribute__((unused)) struct wl_surface *surface,
   __attribute__((unused)) struct wl_array *keys) {
-  /* No-op, like the other wl_keyboard handlers. The wl_array passed here is
-   * owned by libwayland (its data is borrowed from the message buffer, with
-   * alloc == 0); wl_array_release() would free() that borrowed pointer, an
-   * invalid free. */
   ;
 }
 
@@ -1585,9 +1577,9 @@ static void layer_surface_configure(void *data,
   }
   layer->shm_pool = wl_shm_create_pool(param_state->shm, shm_fd,
     layer->size * MAX_UNRELEASED_FRAMES);
-  /* wl_shm_create_pool dups the fd, so close our copy -- otherwise every
-   * configure leaks one fd. (Tearing down the PREVIOUS mapping/pool on a
-   * re-configure is buffer-lifecycle-sensitive and left to the maintainers.) */
+  /* Both the client and the server have now mmap'd the file, and `man 2 mmap`
+   * states that "After the mmap() call has returned, the file descriptor, fd,
+   * can be closed immediately without invalidating the mapping." */
   safe_close(shm_fd);
 
   zeroed_region = wl_compositor_create_region(param_state->compositor);
@@ -2460,8 +2452,6 @@ static void handle_inotify_events(void) {
     rem_len -= struct_len;
     assert(rem_len >= 0);
 
-    /* A zero-length record (e.g. IN_Q_OVERFLOW) carries no name -- ie->name is
-     * one past this entry, so reading it would be out of bounds. Skip it. */
     if (ie->len > 0 && strncmp(ie->name, "event", strlen("event")) == 0) {
       if (ie->mask & IN_CREATE) {
         attach_input_device(ie->name);
@@ -2494,14 +2484,10 @@ static void parse_esc_key_str(const char *esc_key_str) {
   char *orig_key_str_copy = esc_key_str_copy;
   char *root_token = NULL;
   const char *sub_token = NULL;
-  size_t idx = 0;
+  size_t i = 0;
   size_t j = 0;
 
-  /* esc_key_list_len is a global that persists across calls (parse_cli_args
-   * calls this once per -k), so index the just-added slot by esc_key_list_len
-   * - 1, never a per-call counter -- otherwise a second -k overwrites slot 0
-   * and leaves the new slot uninitialised. */
-  while ((root_token = strsep(&esc_key_str_copy, ",")) != NULL) {
+  for (i = 0; ((root_token = strsep(&esc_key_str_copy, ",")) != NULL); i++) {
     if (root_token[0] == '\0' ) {
       fprintf(stderr,
         "FATAL ERROR: Empty key name specified in escape key list!\n");
@@ -2509,16 +2495,15 @@ static void parse_esc_key_str(const char *esc_key_str) {
     }
 
     esc_key_list_len++;
-    idx = esc_key_list_len - 1;
     esc_key_list = safe_reallocarray(esc_key_list, esc_key_list_len,
       sizeof(uint32_t *));
     esc_key_sublist_len = safe_reallocarray(esc_key_sublist_len,
       esc_key_list_len, sizeof(size_t));
     active_esc_key_list = safe_reallocarray(active_esc_key_list,
       esc_key_list_len, sizeof(bool));
-    esc_key_list[idx] = NULL;
-    esc_key_sublist_len[idx] = 0;
-    active_esc_key_list[idx] = false;
+    esc_key_list[i] = NULL;
+    esc_key_sublist_len[i] = 0;
+    active_esc_key_list[i] = false;
 
     for (j = 0; ((sub_token = strsep(&root_token, "|")) != NULL); j++)  {
       if (sub_token[0] == '\0') {
@@ -2527,11 +2512,11 @@ static void parse_esc_key_str(const char *esc_key_str) {
         exit(1);
       }
 
-      esc_key_sublist_len[idx]++;
-      esc_key_list[idx] = safe_reallocarray(esc_key_list[idx],
-        esc_key_sublist_len[idx], sizeof(uint32_t));
-      esc_key_list[idx][j] = lookup_keycode(sub_token);
-      if (esc_key_list[idx][j] == 0) {
+      esc_key_sublist_len[i]++;
+      esc_key_list[i] = safe_reallocarray(esc_key_list[i],
+        esc_key_sublist_len[i], sizeof(uint32_t));
+      esc_key_list[i][j] = lookup_keycode(sub_token);
+      if (esc_key_list[i][j] == 0) {
         fprintf(stderr, "FATAL ERROR: Unrecognized Key name '%s'!\n",
           sub_token);
         exit(1);
@@ -2782,6 +2767,22 @@ static void applayer_poll_init(void) {
   }
 }
 
+static void check_dup_arg_and_mark(int opt, int *seen_opts,
+  ssize_t *seen_opts_pos_ptr) {
+  ssize_t i = 0;
+
+  for (i = 0; i < *seen_opts_pos_ptr; i++) {
+    if (seen_opts[i] == opt) {
+      fprintf(stderr,
+        "FATAL ERROR: Option '-%c' was specified multiple times!\n", opt);
+      exit(1);
+    }
+  }
+
+  seen_opts[*seen_opts_pos_ptr] = opt;
+  (*seen_opts_pos_ptr)++;
+}
+
 static void parse_cli_args(int argc, char **argv) {
   const char *optstring = "d:s:hc:k:n:";
   static struct option optarr[] = {
@@ -2793,7 +2794,12 @@ static void parse_cli_args(int argc, char **argv) {
     {"natural-scrolling", required_argument, NULL, 'n'},
     {0, 0, 0, 0}
   };
+  /* This must be incremented any time a new option is added above, and
+   * decremented when an option is removed. */
+  const ssize_t opts_count = 6;
   int getopt_rslt = 0;
+  int *seen_opts = safe_calloc(opts_count, sizeof(int));
+  ssize_t seen_opts_pos = 0;
 
   while(true) {
     getopt_rslt = getopt_long(argc, argv, optstring, optarr, NULL);
@@ -2802,7 +2808,9 @@ static void parse_cli_args(int argc, char **argv) {
     } else if (getopt_rslt == '?') {
       print_usage();
       exit(1);
-    } else if (getopt_rslt == 'd') {
+    }
+    check_dup_arg_and_mark(getopt_rslt, seen_opts, &seen_opts_pos);
+    if (getopt_rslt == 'd') {
       if (!parse_uint31_arg(optarg, 10, &max_delay)) {
         fprintf(stderr,
           "FATAL ERROR: Invalid value '%s' passed to parameter 'delay'!",
@@ -2846,6 +2854,8 @@ static void parse_cli_args(int argc, char **argv) {
       exit(1);
     }
   }
+
+  free(seen_opts);
 
   if (esc_key_list == NULL) {
     parse_esc_key_str(default_esc_key_str);
