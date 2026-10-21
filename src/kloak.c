@@ -1546,6 +1546,20 @@ static void layer_surface_configure(void *data,
     if (param_state->layers[i]) {
       if (param_state->layers[i]->layer_surface == layer_surface) {
         layer = param_state->layers[i];
+        /* The layer might already be initialized (if, for instance, one of the
+         * screens was resized), so free any previously allocated resources. */
+        if (layer->pixbuf != NULL) {
+          munmap(layer->pixbuf, (size_t)(layer->size) * MAX_UNRELEASED_FRAMES);
+          layer->pixbuf = NULL;
+        }
+        if (layer->shm_pool != NULL) {
+          /* This is safe even if some buffers in this pool haven't been freed
+           * yet, as "The mmapped memory will be released when all buffers that
+           * have been created from this pool are gone." See:
+           * https://wayland.app/protocols/wayland#wl_shm_pool:request:destroy */
+          wl_shm_pool_destroy(layer->shm_pool);
+          layer->shm_pool = NULL;
+        }
         break;
       }
     }
