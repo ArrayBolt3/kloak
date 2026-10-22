@@ -31,6 +31,7 @@
 #define MAX_UNRELEASED_FRAMES 3
 #define POLL_FD_COUNT 3
 #define INOTIFY_READ_BUF_LEN 16384
+#define MAX_INIT_ATTEMPTS 8
 
 #ifndef min
 #define min(a, b) ( ((a) < (b)) ? (a) : (b) )
@@ -199,6 +200,7 @@ struct disp_state {
   struct zxdg_output_manager_v1 *xdg_output_manager;
   struct zxdg_output_v1 *xdg_outputs[MAX_SCREEN_COUNT];
   bool xdg_output_reconfig_flags[MAX_SCREEN_COUNT];
+  bool wl_output_remove_flags[MAX_SCREEN_COUNT];
   struct output_geometry *output_geometries[MAX_SCREEN_COUNT];
   struct output_geometry *pending_output_geometries[MAX_SCREEN_COUNT];
   int32_t global_space_width;
@@ -415,6 +417,19 @@ static int32_t get_ticks_from_scroll_accum(double *accum_ptr);
  * is received, aborts the program.
  */
 static void wl_display_flush_safe(struct wl_display *display);
+
+/*
+ * Sets up structures, objects, and listeners for a newly attached display.
+ */
+static void wl_init_new_display(struct disp_state *param_state,
+  ssize_t disp_idx);
+
+/*
+ * Checks if a display state sync can be done. If so, commits pending geometry
+ * information, cleans up removed displays and their associated data, and
+ * recalculates global space.
+ */
+static void display_sync_maybe(struct disp_state *state);
 
 /********************/
 /* wayland handling */

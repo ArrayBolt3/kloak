@@ -642,6 +642,16 @@ static void recalc_global_space(struct disp_state *param_state) {
       || cur_geom_width < 0 || cur_geom_height < 0) {
       continue;
     }
+    if (cur_geom_x == 0 && cur_geom_y == 0 && cur_geom_width == 0
+      && cur_geom_height == 0) {
+      /*
+       * labwc will send two wl_output::done events for each display, once
+       * before we get position/size information from the XDG output protocol,
+       * and once after. We should ignore displays that don't yet have
+       * position/size information.
+       */
+      continue;
+    }
     screen_list[screen_list_len] = param_state->output_geometries[i];
     screen_list_len++;
     if (cur_geom_x < ul_corner_x) {
@@ -807,6 +817,9 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
   cur_geom_height = state.output_geometries[output_idx]->height;
   if (cur_geom_x < 0 || cur_geom_y < 0 || cur_geom_width < 0
     || cur_geom_height < 0) {
+    return out_val;
+  }
+  if (x >= cur_geom_width || y >= cur_geom_height) {
     return out_val;
   }
 
@@ -1148,6 +1161,89 @@ static void wl_display_flush_safe(struct wl_display *display) {
   }
 }
 
+static void wl_init_new_display(struct disp_state *param_state,
+  ssize_t disp_idx) {
+  param_state->layers[disp_idx] = allocate_drawable_layer(param_state,
+    param_state->outputs[disp_idx]);
+  param_state->xdg_outputs[disp_idx] = zxdg_output_manager_v1_get_xdg_output(
+    param_state->xdg_output_manager, param_state->outputs[disp_idx]);
+  zxdg_output_v1_add_listener(param_state->xdg_outputs[disp_idx],
+    &xdg_output_listener, param_state);
+  wl_output_add_listener(param_state->outputs[disp_idx], &output_listener,
+    param_state);
+  param_state->pending_output_geometries[disp_idx] = safe_calloc(1,
+    sizeof(struct output_geometry));
+}
+
+static void display_sync_maybe(struct disp_state *param_state) {
+  bool should_sync_displays = true;
+  ssize_t i = 0;
+
+  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+    if (param_state->xdg_output_reconfig_flags[i]) {
+      should_sync_displays = false;
+      break;
+    }
+  }
+
+  if (!should_sync_displays) {
+    return;
+  }
+
+  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+    if (param_state->wl_output_remove_flags[i]) {
+      struct drawable_layer *layer = param_state->layers[i];
+
+      if (layer->layer_surface != NULL) {
+        assert(should_draw_cursor);
+        zwlr_layer_surface_v1_destroy(layer->layer_surface);
+      }
+      wl_output_release(param_state->outputs[i]);
+      param_state->outputs[i] = NULL;
+      param_state->output_names[i] = 0;
+      zxdg_output_v1_destroy(param_state->xdg_outputs[i]);
+      param_state->xdg_outputs[i] = NULL;
+      free(param_state->pending_output_geometries[i]);
+      param_state->pending_output_geometries[i] = NULL;
+      free(param_state->output_geometries[i]);
+      param_state->output_geometries[i] = NULL;
+      if (layer->surface != NULL) {
+        assert(should_draw_cursor);
+        wl_surface_destroy(layer->surface);
+      }
+      if (layer->pixbuf != NULL) {
+        assert(should_draw_cursor);
+        assert(layer->size >= 0);
+        munmap(layer->pixbuf,
+          (size_t)(layer->size) * MAX_UNRELEASED_FRAMES);
+      }
+      if (layer->shm_pool != NULL) {
+        assert(should_draw_cursor);
+        wl_shm_pool_destroy(layer->shm_pool);
+      }
+      free(layer);
+      param_state->layers[i] = NULL;
+      param_state->wl_output_remove_flags[i] = false;
+    } else {
+      struct output_geometry *geometry
+        = param_state->pending_output_geometries[i];
+      if (geometry == NULL) {
+        continue;
+      }
+      if (param_state->output_geometries[i] == NULL) {
+        param_state->output_geometries[i] = safe_calloc(1,
+          sizeof(struct output_geometry));
+      }
+      param_state->output_geometries[i]->x = geometry->x;
+      param_state->output_geometries[i]->y = geometry->y;
+      param_state->output_geometries[i]->width = geometry->width;
+      param_state->output_geometries[i]->height = geometry->height;
+    }
+  }
+
+  recalc_global_space(param_state);
+}
+
 /********************/
 /* wayland handling */
 /********************/
@@ -1172,40 +1268,21 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
   } else if (strcmp(interface, wl_shm_interface.name) == 0) {
     param_state->shm = wl_registry_bind(registry, name, &wl_shm_interface, 2);
   } else if (strcmp(interface, wl_output_interface.name) == 0) {
-    bool new_layer_allocated = false;
+    bool new_output_assigned = false;
 
     for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-      if (!param_state->layers[i]) {
+      if (!param_state->outputs[i]) {
         param_state->outputs[i] = wl_registry_bind(registry, name,
           &wl_output_interface, 4);
         param_state->output_names[i] = name;
-        param_state->layers[i] = allocate_drawable_layer(param_state, param_state->outputs[i]);
-        if (param_state->xdg_output_manager) {
-          /*
-           * We can only create xdg_outputs for wl_outputs if we've received
-           * the zxdg_output_manager_v1 object from the server, thus the 'if'
-           * condition here. When we *do* get the zxdg_output_manager_v1
-           * object, we go through and make xdg_outputs for any wl_outputs
-           * that were sent too early.
-           *
-           * NOTE: We do not add wl_output listeners until we have the
-           * zxdg_output_manager_v1 object to avoid the situation where we get
-           * wl_output_done signals before an xdg_output is created for a
-           * wl_output.
-           */
-          param_state->xdg_outputs[i] = zxdg_output_manager_v1_get_xdg_output(
-            param_state->xdg_output_manager, param_state->outputs[i]);
-          zxdg_output_v1_add_listener(param_state->xdg_outputs[i],
-            &xdg_output_listener, param_state);
-          wl_output_add_listener(param_state->outputs[i], &output_listener, param_state);
-          param_state->pending_output_geometries[i] = safe_calloc(1,
-            sizeof(struct output_geometry));
+	if (did_wayland_init) {
+          wl_init_new_display(param_state, i);
         }
-        new_layer_allocated = true;
+        new_output_assigned = true;
         break;
       }
     }
-    if (!new_layer_allocated) {
+    if (!new_output_assigned) {
       fprintf(stderr,
         "FATAL ERROR: Cannot handle more than %d displays attached at once!\n",
         MAX_SCREEN_COUNT);
@@ -1214,35 +1291,17 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
   } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
     param_state->xdg_output_manager = wl_registry_bind(registry, name,
       &zxdg_output_manager_v1_interface, 3);
-    for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-      if ((param_state->outputs[i]) && (!param_state->xdg_outputs[i])) {
-        /*
-         * This is where we make xdg_outputs for any wl_outputs that were
-         * sent too early.
-         */
-        param_state->xdg_outputs[i] = zxdg_output_manager_v1_get_xdg_output(
-          param_state->xdg_output_manager, param_state->outputs[i]);
-        zxdg_output_v1_add_listener(param_state->xdg_outputs[i],
-          &xdg_output_listener, param_state);
-        wl_output_add_listener(param_state->outputs[i], &output_listener, param_state);
-        param_state->pending_output_geometries[i] = safe_calloc(1,
-          sizeof(struct output_geometry));
-      }
-    }
   } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
     if (should_draw_cursor) {
       param_state->layer_shell = wl_registry_bind(registry, name,
         &zwlr_layer_shell_v1_interface, 4);
     }
-  } else if (
-    strcmp(interface, zwlr_virtual_pointer_manager_v1_interface.name) == 0) {
+  } else if (strcmp(interface,
+    zwlr_virtual_pointer_manager_v1_interface.name) == 0) {
     param_state->virt_pointer_manager = wl_registry_bind(registry, name,
       &zwlr_virtual_pointer_manager_v1_interface, 2);
-    param_state->virt_pointer
-      = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(
-      param_state->virt_pointer_manager, NULL);
-  } else if (
-    strcmp(interface, zwp_virtual_keyboard_manager_v1_interface.name) == 0) {
+  } else if (strcmp(interface,
+    zwp_virtual_keyboard_manager_v1_interface.name) == 0) {
     param_state->virt_kb_manager = wl_registry_bind(registry, name,
       &zwp_virtual_keyboard_manager_v1_interface, 1);
   }
@@ -1252,42 +1311,27 @@ static void registry_handle_global_remove(void *data,
    __attribute__((unused)) struct wl_registry *registry,
   uint32_t name) {
   struct disp_state *param_state = data;
+  ssize_t i = 0;
 
-  for (ssize_t i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->layers[i]) {
-      if (param_state->output_names[i] == name) {
-        struct drawable_layer *layer = param_state->layers[i];
-
-        if (layer->layer_surface != NULL) {
-          assert(should_draw_cursor);
-          zwlr_layer_surface_v1_destroy(layer->layer_surface);
-        }
+  if (did_wayland_init) {
+    for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+      if (param_state->layers[i] && param_state->output_names[i] == name) {
+        param_state->wl_output_remove_flags[i] = true;
+        display_sync_maybe(param_state);
+        break;
+      }
+    }
+  } else {
+    /*
+     * During early init, only outputs[i] and output_names[i] are set,
+     * everything else will be set once early init is done. We can free things
+     * immediately in this instance.
+     */
+    for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+      if (param_state->outputs[i] && param_state->output_names[i] == name) {
         wl_output_release(param_state->outputs[i]);
         param_state->outputs[i] = NULL;
         param_state->output_names[i] = 0;
-        zxdg_output_v1_destroy(param_state->xdg_outputs[i]);
-        param_state->xdg_outputs[i] = NULL;
-        free(param_state->pending_output_geometries[i]);
-        param_state->pending_output_geometries[i] = NULL;
-        free(param_state->output_geometries[i]);
-        param_state->output_geometries[i] = NULL;
-        if (layer->surface != NULL) {
-          assert(should_draw_cursor);
-          wl_surface_destroy(layer->surface);
-        }
-        if (layer->pixbuf != NULL) {
-          assert(should_draw_cursor);
-          assert(layer->size >= 0);
-          munmap(layer->pixbuf,
-            (size_t)(layer->size) * MAX_UNRELEASED_FRAMES);
-        }
-        if (layer->shm_pool != NULL) {
-          assert(should_draw_cursor);
-          wl_shm_pool_destroy(layer->shm_pool);
-        }
-        free(layer);
-        param_state->layers[i] = NULL;
-        recalc_global_space(param_state);
         break;
       }
     }
@@ -1482,7 +1526,6 @@ static void wl_output_handle_mode(__attribute__((unused)) void *data,
 
 static void wl_output_info_done(void *data, struct wl_output *output) {
   struct disp_state *param_state = data;
-  bool should_sync_geometries = true;
   ssize_t i = 0;
 
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
@@ -1492,31 +1535,7 @@ static void wl_output_info_done(void *data, struct wl_output *output) {
     }
   }
 
-  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->xdg_output_reconfig_flags[i]) {
-      should_sync_geometries = false;
-      break;
-    }
-  }
-
-  if (should_sync_geometries) {
-    for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-      struct output_geometry *geometry = param_state->pending_output_geometries[i];
-      if (geometry == NULL) {
-        continue;
-      }
-      if (param_state->output_geometries[i] == NULL) {
-        param_state->output_geometries[i] = safe_calloc(1,
-          sizeof(struct output_geometry));
-      }
-      param_state->output_geometries[i]->x = geometry->x;
-      param_state->output_geometries[i]->y = geometry->y;
-      param_state->output_geometries[i]->width = geometry->width;
-      param_state->output_geometries[i]->height = geometry->height;
-    }
-
-    recalc_global_space(param_state);
-  }
+  display_sync_maybe(param_state);
 }
 
 static void wl_output_handle_scale(__attribute__((unused)) void *data,
@@ -1682,7 +1701,8 @@ static int li_open_restricted(const char *path, int flags,
 
   if (did_wayland_init) {
     if (ioctl(fd, EVIOCGRAB, &one) < 0) {
-      fprintf(stderr, "FATAL ERROR: Could not grab evdev device '%s'!\n", path);
+      fprintf(stderr,
+        "FATAL ERROR: Could not grab evdev device '%s'!\n", path);
       exit(1);
     }
   }
@@ -1707,9 +1727,15 @@ static void draw_frame(struct drawable_layer *layer) {
   ssize_t layer_idx = 0;
 
   assert(should_draw_cursor);
-
-  if (!layer->layer_surface_configured)
+  assert(cursor_x < INT32_MAX && cursor_x > INT32_MIN);
+  assert(cursor_y < INT32_MAX && cursor_y > INT32_MIN);
+  if (cursor_x < 0 || cursor_y < 0) {
     return;
+  }
+
+  if (!layer->layer_surface_configured) {
+    return;
+  }
 
   for (frame_idx = 0; frame_idx < MAX_UNRELEASED_FRAMES; frame_idx++) {
     if (!layer->frame_in_use[frame_idx]) {
@@ -1731,8 +1757,6 @@ static void draw_frame(struct drawable_layer *layer) {
     layer->size * chosen_frame_idx, layer->width, layer->height,
     layer->stride, WL_SHM_FORMAT_ARGB8888);
 
-  assert(cursor_x < INT32_MAX && cursor_x >= 0);
-  assert(cursor_y < INT32_MAX && cursor_y >= 0);
   scr_coord = abs_coord_to_screen_local_coord((int32_t)(cursor_x),
     (int32_t)(cursor_y));
 
@@ -1780,8 +1804,8 @@ static void draw_frame(struct drawable_layer *layer) {
   layer->frame_in_use[chosen_frame_idx] = true;
 }
 
-static struct drawable_layer *allocate_drawable_layer(struct disp_state *param_state,
-  struct wl_output *output) {
+static struct drawable_layer *allocate_drawable_layer(
+  struct disp_state *param_state, struct wl_output *output) {
   struct drawable_layer *layer = safe_calloc(1, sizeof(struct drawable_layer));
   ssize_t i = 0;
 
@@ -1844,8 +1868,8 @@ static struct input_packet * update_virtual_cursor(void) {
   struct input_packet *old_ev_packet = NULL;
   struct input_packet *ev_packet = NULL;
 
-  assert(prev_cursor_x < INT32_MAX && prev_cursor_x >= 0);
-  assert(prev_cursor_y < INT32_MAX && prev_cursor_y >= 0);
+  assert(prev_cursor_x < INT32_MAX && prev_cursor_x > INT32_MIN);
+  assert(prev_cursor_y < INT32_MAX && prev_cursor_y > INT32_MIN);
 
   prev_scr_coord = abs_coord_to_screen_local_coord((int32_t)(prev_cursor_x),
     (int32_t)(prev_cursor_y));
@@ -1865,8 +1889,8 @@ static struct input_packet * update_virtual_cursor(void) {
         prev_cursor_y = sane_location.y;
         cursor_x = sane_location.x;
         cursor_y = sane_location.y;
-        assert(prev_cursor_x < INT32_MAX && prev_cursor_x >= 0);
-        assert(prev_cursor_y < INT32_MAX && prev_cursor_y >= 0);
+        assert(prev_cursor_x < INT32_MAX && prev_cursor_x > INT32_MIN);
+        assert(prev_cursor_y < INT32_MAX && prev_cursor_y > INT32_MIN);
         prev_scr_coord = abs_coord_to_screen_local_coord(
           (int32_t)(prev_cursor_x), (int32_t)(prev_cursor_y));
         if (!prev_scr_coord.valid
@@ -2682,6 +2706,9 @@ static void applayer_random_init(void) {
 }
 
 static void applayer_wayland_init(void) {
+  const char *missing_obj_name = NULL;
+  ssize_t i = 0;
+
   /*
    * Technically we also initialize xkbcommon here, but it's only involved
    * because it's important for sending key events to Wayland.
@@ -2715,62 +2742,49 @@ static void applayer_wayland_init(void) {
     exit(1);
   }
   wl_registry_add_listener(state.registry, &registry_listener, &state);
-  wl_display_roundtrip(state.display);
+
+  for (ssize_t init_attempts = 0; init_attempts < MAX_INIT_ATTEMPTS;
+    init_attempts++) {
+    wl_display_roundtrip(state.display);
+    /* Check if we have all the objects we need for normal operation yet. */
+    missing_obj_name = NULL;
+    if (state.shm == NULL) {
+      missing_obj_name = "wl_shm";
+    } else if (state.compositor == NULL) {
+      missing_obj_name = "wl_compositor";
+    } else if (state.seat == NULL) {
+      missing_obj_name = "wl_seat";
+    } else if (state.xdg_output_manager == NULL) {
+      missing_obj_name = "zxdg_output_manager_v1";
+    } else if (should_draw_cursor && state.layer_shell == NULL) {
+      missing_obj_name = "zwlr_layer_shell_v1";
+    } else if (state.virt_pointer_manager == NULL) {
+      missing_obj_name = "zwlr_virtual_pointer_manager_v1";
+    } else if (state.virt_kb_manager == NULL) {
+      missing_obj_name = "zwp_virtual_keyboard_manager_v1";
+    }
+    if (missing_obj_name == NULL) {
+      break;
+    }
+  }
+  if (missing_obj_name != NULL) {
+    fprintf(stderr, "FATAL ERROR: No %s object from compositor!\n",
+      missing_obj_name);
+    exit(1);
+  }
 
   /*
-   * At this point, most of the Wayland state should be initialized and set
-   * up. Double-check it though, we don't know what Wayland compositor we're
-   * running on and we don't want to crash later because the compositor
-   * doesn't support a feature we need.
+   * Early init is done, set up things now that we have a good set of starting
+   * objects.
    */
-  if (state.shm == NULL) {
-    fprintf(stderr, "FATAL ERROR: No wl_shm object from compositor!\n");
-    exit(1);
-  }
-  if (state.compositor == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: No wl_compositor object from compositor!\n");
-    exit(1);
-  }
-  if (state.seat == NULL) {
-    fprintf(stderr, "FATAL ERROR: No wl_seat object from compositor!\n");
-    exit(1);
-  }
-  if (state.outputs[0] == NULL) {
-    fprintf(stderr, "FATAL ERROR: No wl_output objects from compositor!\n");
-    exit(1);
-  }
-  if (state.xdg_output_manager == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: No zxdg_output_manager_v1 object from compositor!\n");
-    exit(1);
-  }
-  if (state.xdg_outputs[0] == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: No zxdg_output_v1 objects from compositor!\n");
-    exit(1);
-  }
-  if (should_draw_cursor && state.layer_shell == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: No zwlr_layer_shell_v1 object from compositor!\n");
-    exit(1);
-  }
-  if (state.virt_pointer_manager == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: No zwlr_virtual_pointer_manager_v1 object from compositor!\n");
-    exit(1);
-  }
-  if (state.virt_kb_manager == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: No zwp_virtual_keyboard_manager_v1 object from compositor!\n");
-    exit(1);
-  }
+  did_wayland_init = true;
+  state.virt_pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(
+    state.virt_pointer_manager, NULL);
   if (state.virt_pointer == NULL) {
     fprintf(stderr,
       "FATAL ERROR: No zwlr_virtual_pointer_v1 object from compositor!\n");
     exit(1);
   }
-
   state.virt_kb = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(
     state.virt_kb_manager, state.seat);
   /*
@@ -2784,25 +2798,30 @@ static void applayer_wayland_init(void) {
   if ((uintptr_t)(state.virt_kb)
     == (uintptr_t)(ZWP_VIRTUAL_KEYBOARD_MANAGER_V1_ERROR_UNAUTHORIZED)) {
     fprintf(stderr,
-      "Not authorized to create a virtual keyboard! Bailing out.\n");
+      "FATAL ERROR: Not authorized to create a virtual keyboard!\n");
     exit(1);
   }
-  wl_seat_add_listener(state.seat, &seat_listener, &state);
-
   state.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   if (!state.xkb_ctx) {
     fprintf(stderr, "FATAL ERROR: Could not create XKB context!\n");
     exit(1);
   }
+  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+    if (state.outputs[i]) {
+      wl_init_new_display(&state, i);
+    }
+  }
 
-  /* Make sure any remaining allocations and similar have finished */
+  /*
+   * state.kb is set by the seat_handle_capabilities() function, which is part
+   * of the wl_seat listener.
+   */
+  wl_seat_add_listener(state.seat, &seat_listener, &state);
   wl_display_roundtrip(state.display);
   if (state.kb == NULL) {
     fprintf(stderr, "FATAL ERROR: No wl_keyboard object from compositor!\n");
     exit(1);
   }
-
-  did_wayland_init = true;
 }
 
 static void applayer_libinput_init(void) {
