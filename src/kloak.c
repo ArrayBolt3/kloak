@@ -2428,6 +2428,48 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   } else if ((li_event_type == LIBINPUT_EVENT_DEVICE_ADDED)
     || (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON)
     || (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY)) {
+
+    if (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
+      /*
+       * If this is a mousedown event, ignore it if there are multiple of the
+       * same button being held down across multiple devices. For mouseup,
+       * ignore the event if not all instances of the button have been
+       * released.
+       */
+      struct libinput_event_pointer *pointer_button_event =
+        libinput_event_get_pointer_event(li_event);
+      enum libinput_button_state button_state
+        = libinput_event_pointer_get_button_state(pointer_button_event);
+      uint32_t button_held_count
+        = libinput_event_pointer_get_seat_button_count(pointer_button_event);
+      if (
+        (button_state == LIBINPUT_BUTTON_STATE_PRESSED
+          && button_held_count > 1)
+        || (button_state == LIBINPUT_BUTTON_STATE_RELEASED
+          && button_held_count > 0)
+      ) {
+        libinput_event_destroy(li_event);
+        return;
+      }
+    } else if (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+      /* Same logic as above, but for keys. */
+      struct libinput_event_keyboard *kb_event
+        = libinput_event_get_keyboard_event(li_event);
+      enum libinput_key_state key_state
+        = libinput_event_keyboard_get_key_state(kb_event);
+      uint32_t key_held_count
+        = libinput_event_keyboard_get_seat_key_count(kb_event);
+      if (
+        (key_state == LIBINPUT_KEY_STATE_PRESSED
+          && key_held_count > 1)
+        || (key_state == LIBINPUT_KEY_STATE_RELEASED
+          && key_held_count > 0)
+      ) {
+        libinput_event_destroy(li_event);
+        return;
+      }
+    }
+
     ev_packet = safe_calloc(1, sizeof(struct input_packet));
     if (ev_packet == NULL) {
       fprintf(stderr,
