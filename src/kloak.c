@@ -356,8 +356,10 @@ static void li_device_info_ref(struct li_device_info *ldi) {
 static void li_device_info_unref(struct li_device_info *ldi) {
   ldi->refcount -= 1;
   if (ldi->refcount == 0) {
-    /* The user data for a device is the struct we're freeing, so NULL out the
-     * user data for safety. */
+    /*
+     * The user data for a device is the struct we're freeing, so NULL out the
+     * user data for safety.
+     */
     libinput_device_set_user_data(ldi->device, NULL);
     free(ldi->device_name);
     free(ldi);
@@ -761,10 +763,12 @@ static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
     break;
   }
 
-  /* There is a possibility that out_data will contain all zeros; if this
+  /*
+   * There is a possibility that out_data will contain all zeros; if this
    * happens, it means that no output covered the requested coordinates in the
    * compositor's global space. That's a valid thing to tell a caller, so just
-   * return it anyway. */
+   * return it anyway.
+   */
   return out_data;
 }
 
@@ -968,9 +972,11 @@ static int32_t sleep_ms(int64_t ms) {
   return 0;
 }
 
-/* GCC issues a false-positive warning if the rslt_len check catches a -1
+/*
+ * GCC issues a false-positive warning if the rslt_len check catches a -1
  * return from vsnprintf. Why is not known, but the code is known to be
- * good. */
+ * good.
+ */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 static char *sgenprintf(const char *str, ...) {
@@ -1079,12 +1085,14 @@ static void detach_input_device(const char *dev_name) {
 
   dev = ldi_node->device;
   LIST_REMOVE(ldi_node, entries);
-  /* 'ldi_node' MUST be unreferenced first, then the contained device can be
+  /*
+   * 'ldi_node' MUST be unreferenced first, then the contained device can be
    * removed. li_device_info_unref() will null out the user data of 'dev'
    * before freeing 'ldi_node' if the reference count reaches 0, and libinput
    * is liable to free 'dev' if removing it causes its reference count to
    * reach 0. Thus reversing the below two lines would likely result in a
-   * use-after-free. */
+   * use-after-free.
+   */
   li_device_info_unref(ldi_node);
   libinput_path_remove_device(dev);
 }
@@ -1097,11 +1105,13 @@ static int32_t get_ticks_from_scroll_accum(double *accum_ptr) {
   if (fpclassify(scroll_accum) != FP_ZERO) {
     assert(isfinite(scroll_accum));
     scroll_ticks_d = scroll_accum / SCROLL_UNITS_PER_TICK_D;
-    /* We intentionally use SCROLL_UNITS_PER_TICK here, not
+    /*
+     * We intentionally use SCROLL_UNITS_PER_TICK here, not
      * SCROLL_UNITS_PER_TICK_D. The extra fraction of a scroll tick we would
      * gain from using SCROLL_UNITS_PER_TICK_D is not worthwhile, and having
      * the enforced threshold slightly lower than the real threshold is
-     * arguably safer. */
+     * arguably safer.
+     */
     assert(scroll_ticks_d <= (INT32_MAX / SCROLL_UNITS_PER_TICK));
     assert(scroll_ticks_d >= (INT32_MIN / SCROLL_UNITS_PER_TICK));
     scroll_ticks = (int32_t)(scroll_ticks_d);
@@ -1333,7 +1343,8 @@ static void kb_handle_keymap(void *data,
       return;
     } else {
       assert(param_state->old_kb_map_shm_size >= 0);
-      munmap(param_state->old_kb_map_shm, (size_t)(param_state->old_kb_map_shm_size));
+      munmap(param_state->old_kb_map_shm,
+        (size_t)(param_state->old_kb_map_shm_size));
     }
   }
   zwp_virtual_keyboard_v1_keymap(param_state->virt_kb, format, fd, size);
@@ -1361,11 +1372,13 @@ static void kb_handle_keymap(void *data,
   param_state->virt_kb_keymap_set = true;
 }
 
-/* Note that the keys array MUST NOT be freed. Wayland clients are responsible
+/*
+ * Note that the keys array MUST NOT be freed. Wayland clients are responsible
  * for closing fds sent by the server
  * (https://gitlab.freedesktop.org/wayland/wayland/-/work_items/184#note_696613),
  * but the server is responsible for freeing arrays it allocated itself
- * (https://gitlab.freedesktop.org/wlroots/wlroots/-/blob/1e7baefe96606bc7beb7d60f6c69eb209ece832b/types/seat/wlr_seat_keyboard.c#L433-457). */
+ * (https://gitlab.freedesktop.org/wlroots/wlroots/-/blob/1e7baefe96606bc7beb7d60f6c69eb209ece832b/types/seat/wlr_seat_keyboard.c#L433-457).
+ */
 static void kb_handle_enter(__attribute__((unused)) void *data,
   __attribute__((unused)) struct wl_keyboard *kb,
   __attribute__((unused)) uint32_t serial,
@@ -1547,9 +1560,11 @@ static void xdg_output_handle_logical_size(void *data,
 
 static void xdg_output_info_done(__attribute__((unused)) void *data,
   __attribute__((unused)) struct zxdg_output_v1 *xdg_output) {
-  /* NOTE: This function is intentionally not used. Compositors no longer send
+  /*
+   * NOTE: This function is intentionally not used. Compositors no longer send
    * xdg_output::done, and instead send wl_output::done. See:
-   * https://wayland.app/protocols/xdg-output-unstable-v1#zxdg_output_v1:event:done */
+   * https://wayland.app/protocols/xdg-output-unstable-v1#zxdg_output_v1:event:done
+   */
   ;
 }
 
@@ -1581,17 +1596,21 @@ static void layer_surface_configure(void *data,
     if (param_state->layers[i]) {
       if (param_state->layers[i]->layer_surface == layer_surface) {
         layer = param_state->layers[i];
-        /* The layer might already be initialized (if, for instance, one of the
-         * screens was resized), so free any previously allocated resources. */
+        /*
+         * The layer might already be initialized (if, for instance, one of the
+         * screens was resized), so free any previously allocated resources.
+         */
         if (layer->pixbuf != NULL) {
           munmap(layer->pixbuf, (size_t)(layer->size) * MAX_UNRELEASED_FRAMES);
           layer->pixbuf = NULL;
         }
         if (layer->shm_pool != NULL) {
-          /* This is safe even if some buffers in this pool haven't been freed
+          /*
+           * This is safe even if some buffers in this pool haven't been freed
            * yet, as "The mmapped memory will be released when all buffers that
            * have been created from this pool are gone." See:
-           * https://wayland.app/protocols/wayland#wl_shm_pool:request:destroy */
+           * https://wayland.app/protocols/wayland#wl_shm_pool:request:destroy
+           */
           wl_shm_pool_destroy(layer->shm_pool);
           layer->shm_pool = NULL;
         }
@@ -1615,8 +1634,8 @@ static void layer_surface_configure(void *data,
       strerror(errno));
     exit(1);
   }
-  layer->pixbuf = mmap(NULL, (size_t)(layer->size * MAX_UNRELEASED_FRAMES), PROT_READ | PROT_WRITE,
-    MAP_SHARED, shm_fd, 0);
+  layer->pixbuf = mmap(NULL, (size_t)(layer->size * MAX_UNRELEASED_FRAMES),
+    PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
   if (layer->pixbuf == MAP_FAILED) {
     safe_close(shm_fd);
     fprintf(stderr,
@@ -1626,9 +1645,11 @@ static void layer_surface_configure(void *data,
   }
   layer->shm_pool = wl_shm_create_pool(param_state->shm, shm_fd,
     layer->size * MAX_UNRELEASED_FRAMES);
-  /* Both the client and the server have now mmap'd the file, and `man 2 mmap`
+  /*
+   * Both the client and the server have now mmap'd the file, and `man 2 mmap`
    * states that "After the mmap() call has returned, the file descriptor, fd,
-   * can be closed immediately without invalidating the mapping." */
+   * can be closed immediately without invalidating the mapping."
+   */
   safe_close(shm_fd);
 
   zeroed_region = wl_compositor_create_region(param_state->compositor);
@@ -1821,9 +1842,11 @@ static struct input_packet * update_virtual_cursor(void) {
     (int32_t)(prev_cursor_y));
 
   if (!prev_scr_coord.valid || !state.layers[prev_scr_coord.output_idx]) {
-    /* We've somehow gotten into a spot where the previous coordinate data
+    /*
+     * We've somehow gotten into a spot where the previous coordinate data
      * either is invalid or points at an area where there is no screen. Reset
-     * everything in the hopes of recovering sanity. */
+     * everything in the hopes of recovering sanity.
+     */
     printf("Resetting!\n");
     for (i = 0; i < MAX_SCREEN_COUNT; i++) {
       if (state.layers[i]) {
@@ -1837,17 +1860,19 @@ static struct input_packet * update_virtual_cursor(void) {
         assert(prev_cursor_y < INT32_MAX && prev_cursor_y >= 0);
         prev_scr_coord = abs_coord_to_screen_local_coord(
           (int32_t)(prev_cursor_x), (int32_t)(prev_cursor_y));
-        if (!prev_scr_coord.valid || !state.layers[prev_scr_coord.output_idx]) {
-          /* Okay, that didn't end up being sane after all, try the next
-           * screen. */
+        if (!prev_scr_coord.valid
+          || !state.layers[prev_scr_coord.output_idx]) {
+          /* This screen couldn't restore sanity, try the next one. */
           continue;
         }
         break;
       }
     }
     if (!prev_scr_coord.valid || !state.layers[prev_scr_coord.output_idx]) {
-      /* An attempt at making things sane failed, therefore bail out and don't
-       * create any new input_packet. */
+      /*
+       * All attempts at making things sane failed, therefore bail out and
+       * don't create any new input_packet.
+       */
       return NULL;
     }
   }
@@ -2048,9 +2073,11 @@ static void handle_libinput_event(struct libinput_event *li_event,
     mouse_event_handled = true;
 
     if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
-      /* Both libinput and zwlr_virtual_pointer_v1 use evdev event codes to
+      /*
+       * Both libinput and zwlr_virtual_pointer_v1 use evdev event codes to
        * identify the button pressed, so we can just pass the data from
-       * libinput straight through */
+       * libinput straight through.
+       */
       zwlr_virtual_pointer_v1_button(
         state.virt_pointer, ts_milliseconds, button_code,
         WL_POINTER_BUTTON_STATE_PRESSED);
@@ -2074,8 +2101,10 @@ static void handle_libinput_event(struct libinput_event *li_event,
       xkb_layout_index_t effective_group;
 
       if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
-        /* XKB keycodes == evdev keycodes + 8. Why this design decision was
-         * made, I have no idea. */
+        /*
+         * XKB keycodes == evdev keycodes + 8. Why this design decision was
+         * made, I have no idea.
+         */
         xkb_state_update_key(state.xkb_state, key + 8, XKB_KEY_DOWN);
       } else {
         xkb_state_update_key(state.xkb_state, key + 8, XKB_KEY_UP);
@@ -2093,10 +2122,12 @@ static void handle_libinput_event(struct libinput_event *li_event,
       zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key,
         key_state);
 
-      /* Generally, X11 and Wayland turn an LED on after a key press, and
+      /*
+       * Generally, X11 and Wayland turn an LED on after a key press, and
        * off after a key release. The exact reason for this is unclear, but
        * we mimic that behavior here to make sure we don't trip any weird
-       * edge cases that depend on this. */
+       * edge cases that depend on this.
+       */
       if (key == KEY_NUMLOCK) {
         if (key_state == LIBINPUT_KEY_STATE_PRESSED
           && !ev_device_info->num_lock_held) {
@@ -2508,7 +2539,8 @@ static void handle_inotify_events(void) {
   while (true) {
     assert(rem_len >= (ssize_t)(sizeof(struct inotify_event)));
     assert(ie->len < SSIZE_MAX - sizeof(struct inotify_event));
-    struct_len = ((ssize_t)(sizeof(struct inotify_event)) + (ssize_t)(ie->len));
+    struct_len = ((ssize_t)(sizeof(struct inotify_event))
+      + (ssize_t)(ie->len));
     assert(struct_len <= rem_len);
     rem_len -= struct_len;
     assert(rem_len >= 0);
@@ -2855,8 +2887,10 @@ static void parse_cli_args(int argc, char **argv) {
     {"natural-scrolling", required_argument, NULL, 'n'},
     {0, 0, 0, 0}
   };
-  /* This must be incremented any time a new option is added above, and
-   * decremented when an option is removed. */
+  /*
+   * This must be incremented any time a new option is added above, and
+   * decremented when an option is removed.
+   */
   const ssize_t opts_count = 6;
   int getopt_rslt = 0;
   int *seen_opts = safe_calloc(opts_count, sizeof(int));
