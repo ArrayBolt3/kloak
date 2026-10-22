@@ -708,6 +708,15 @@ static void recalc_global_space(struct disp_state *param_state) {
   if (conn_screen_list_len != screen_list_len) {
     fprintf(stderr,
       "FATAL ERROR: Multiple screens are attached and gaps are present between them. kloak cannot operate in this configuration.\n");
+    /*
+     * Debugging.
+     *
+     * fprintf(stderr, "Map of display geometries:\n");
+     * for (ssize_t z = 0; z < screen_list_len; z++) {
+     *   fprintf(stderr, "Screen %ld: x = %d, y = %d, width = %d, height = %d\n",
+     *     z, screen_list[z]->x, screen_list[z]->y, screen_list[z]->width, screen_list[z]->height);
+     * }
+     */
     exit(1);
   }
 
