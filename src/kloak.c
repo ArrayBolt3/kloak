@@ -1637,6 +1637,16 @@ static void layer_surface_configure(void *data,
   draw_frame(layer);
 }
 
+static void layer_surface_closed(__attribute__((unused)) void *data,
+  __attribute__((unused)) struct zwlr_layer_surface_v1 *layer_surface) {
+  /*
+   * We destroy layer surfaces when screens are removed. If the compositor
+   * starts ignoring our changes to the layer surface, that's its option, but
+   * we don't handle this specially.
+   */
+  ;
+}
+
 /*********************/
 /* libinput handling */
 /*********************/

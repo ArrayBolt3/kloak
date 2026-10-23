@@ -470,6 +470,8 @@ static void xdg_output_handle_description(void *data,
 static void layer_surface_configure(void *data,
   struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial, uint32_t width,
   uint32_t height);
+static void layer_surface_closed(void *data,
+  struct zwlr_layer_surface_v1 *layer_surface);
 
 /*********************/
 /* libinput handling */
@@ -675,6 +677,7 @@ static const struct zxdg_output_v1_listener xdg_output_listener = {
 };
 static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
   .configure = layer_surface_configure,
+  .closed = layer_surface_closed,
 };
 
 /**********************/
