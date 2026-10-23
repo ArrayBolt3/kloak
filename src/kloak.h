@@ -60,24 +60,24 @@ enum input_packet_type {
  * below.
  */
 union input_packet_data {
-  struct {
+  struct ip_mousemove {
     int32_t cursor_x;
     int32_t cursor_y;
   } mousemove;
 
-  struct {
+  struct ip_mousescroll {
     int32_t vert_scroll_ticks;
     int32_t horiz_scroll_ticks;
   } mousescroll;
 
-  struct {
+  struct ip_fake_libinput {
     enum libinput_event_type event_type;
     enum libinput_button_state button_state;
     enum libinput_key_state key_state;
     uint32_t button_code;
   } fake_libinput;
 
-  struct {
+  struct ip_libinput {
     struct libinput_event *li_event;
   } libinput;
 };
@@ -98,8 +98,7 @@ union input_packet_data {
  * - libinput events are raw events directly from libinput, intended for
  *   release unmodified at a later time.
  *
- * All kinds of events have a scheduled release time. An `entries` field is
- * included to allow buffered events to be stored in a tail queue.
+ * All kinds of events have a scheduled release time.
  *
  * The actual data of the input packet is in the `data` field. The fields of
  * `data` (mousemove, mousescroll, fake_libinput, libinput) correspond to the
@@ -111,7 +110,8 @@ struct input_packet {
   enum input_packet_type packet_type;
   int64_t sched_time;
   uint32_t refcount;
-  TAILQ_ENTRY(input_packet) entries;
+  TAILQ_ENTRY(input_packet) evq_entries;
+  TAILQ_ENTRY(input_packet) trackq_entries;
   union input_packet_data data;
 };
 
@@ -122,14 +122,9 @@ struct input_packet {
 struct li_device_info {
   struct libinput_device *device;
   char *device_name;
-  uint8_t num_lock_state;
-  bool num_lock_held;
-  uint8_t caps_lock_state;
-  bool caps_lock_held;
-  enum libinput_led last_led_state;
   uint32_t refcount;
   TAILQ_HEAD(tailhead_trackq, input_packet) trackq_head;
-  LIST_ENTRY(li_device_info) entries;
+  LIST_ENTRY(li_device_info) ldi_entries;
 };
 
 /*
@@ -562,6 +557,19 @@ static struct input_packet *update_virtual_cursor(void);
  * event to reflect the new scroll quantity otherwise.
  */
 static struct input_packet *update_mouse_scroll(void);
+
+/*
+ * Processes a button press/release from either a libinput or fake libinput
+ * event.
+ */
+static void handle_pointer_button_event(uint32_t ts_milliseconds,
+  uint32_t button_code, enum libinput_button_state button_state);
+
+/*
+ * Processes a key press/release from either a libinput or fake libinput event.
+ */
+static void handle_key_event(uint32_t ts_milliseconds,
+  uint32_t key_code, enum libinput_key_state button_state);
 
 /*
  * Processes a libinput event, sending emulated input to the compositor as

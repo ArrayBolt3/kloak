@@ -112,6 +112,12 @@ static int64_t start_time = 0;
 
 static int randfd = 0;
 
+uint8_t num_lock_state = 0;
+bool num_lock_held = false;
+uint8_t caps_lock_state = 0;
+bool caps_lock_held = false;
+enum libinput_led last_led_state;
+
 static bool did_wayland_init = false;
 static bool exit_on_wl_connect_failure = false;
 
@@ -351,13 +357,13 @@ static void safe_closedir(DIR *dirp) {
 
 static void input_packet_ref(struct input_packet *ip) {
   ip->refcount += 1;
-  printf("Reffed %lu %u\n", (uint64_t)ip, ip->refcount);
+  printf("Reffed %lu %lu\n", (uint64_t)ip, (uint64_t)ip->refcount);
   assert(ip->refcount != 0);
 }
 
 static void input_packet_unref(struct input_packet *ip) {
   ip->refcount -= 1;
-  printf("Unreffed %lu %u\n", (uint64_t)ip, ip->refcount);
+  printf("Unreffed %lu %lu\n", (uint64_t)ip, (uint64_t)ip->refcount);
   assert(ip->refcount != UINT32_MAX);
   if (ip->refcount == 0) {
     if (ip->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
@@ -1069,7 +1075,7 @@ static void attach_input_device(const char *dev_name) {
       found_device = true;
       break;
     }
-    ldi_node = LIST_NEXT(ldi_node, entries);
+    ldi_node = LIST_NEXT(ldi_node, ldi_entries);
   }
 
   if (found_device) {
@@ -1097,15 +1103,10 @@ static void attach_input_device(const char *dev_name) {
   ldi_node = safe_calloc(1, sizeof(struct li_device_info));
   ldi_node->device = new_device;
   ldi_node->device_name = safe_strdup(dev_name);
-  ldi_node->num_lock_state = 0;
-  ldi_node->num_lock_held = false;
-  ldi_node->caps_lock_state = 0;
-  ldi_node->caps_lock_held = false;
-  ldi_node->last_led_state = 0;
   ldi_node->refcount = 1;
   TAILQ_INIT(&ldi_node->trackq_head);
   libinput_device_set_user_data(new_device, ldi_node);
-  LIST_INSERT_HEAD(&ldi_head, ldi_node, entries);
+  LIST_INSERT_HEAD(&ldi_head, ldi_node, ldi_entries);
 }
 
 static void detach_input_device(const char *dev_name) {
@@ -1119,7 +1120,7 @@ static void detach_input_device(const char *dev_name) {
       found_device = true;
       break;
     }
-    ldi_node = LIST_NEXT(ldi_node, entries);
+    ldi_node = LIST_NEXT(ldi_node, ldi_entries);
   }
 
   if (!found_device) {
@@ -1127,7 +1128,7 @@ static void detach_input_device(const char *dev_name) {
   }
 
   dev = ldi_node->device;
-  LIST_REMOVE(ldi_node, entries);
+  LIST_REMOVE(ldi_node, ldi_entries);
   /*
    * 'ldi_node' MUST be unreferenced first, then the contained device can be
    * removed. li_device_info_unref() will null out the user data of 'dev'
@@ -1274,7 +1275,7 @@ static void queue_input_event(struct input_packet *ev_packet) {
   lower_bound = min(max(prev_release_time - current_time, 0), max_delay);
   random_delay = random_between(lower_bound, max_delay);
   ev_packet->sched_time = current_time + random_delay;
-  TAILQ_INSERT_TAIL(&evq_head, ev_packet, entries);
+  TAILQ_INSERT_TAIL(&evq_head, ev_packet, evq_entries);
   prev_release_time = ev_packet->sched_time;
 }
 
@@ -2114,9 +2115,105 @@ static struct input_packet *update_mouse_scroll(void) {
   return NULL;
 }
 
+static void handle_pointer_button_event(uint32_t ts_milliseconds,
+  uint32_t button_code, enum libinput_button_state button_state) {
+  if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
+    /*
+     * Both libinput and zwlr_virtual_pointer_v1 use evdev event codes to
+     * identify the button pressed, so we can just pass the data from
+     * libinput straight through.
+     */
+    zwlr_virtual_pointer_v1_button(
+      state.virt_pointer, ts_milliseconds, button_code,
+      WL_POINTER_BUTTON_STATE_PRESSED);
+  } else if (button_state == LIBINPUT_BUTTON_STATE_RELEASED) {
+    zwlr_virtual_pointer_v1_button(
+      state.virt_pointer, ts_milliseconds, button_code,
+      WL_POINTER_BUTTON_STATE_RELEASED);
+  } else {
+    assert(false);
+  }
+  zwlr_virtual_pointer_v1_frame(state.virt_pointer);
+}
+
+static void handle_key_event(uint32_t ts_milliseconds,
+  uint32_t key_code, enum libinput_key_state key_state) {
+  xkb_mod_mask_t depressed_mods;
+  xkb_mod_mask_t latched_mods;
+  xkb_mod_mask_t locked_mods;
+  xkb_layout_index_t effective_group;
+  enum libinput_led led_state = 0;
+
+  if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
+    /*
+     * XKB keycodes == evdev keycodes + 8. Why this design decision was
+     * made, I have no idea.
+     */
+    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_DOWN);
+  } else {
+    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_UP);
+  }
+  depressed_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_DEPRESSED);
+  latched_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_LATCHED);
+  locked_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_LOCKED);
+  effective_group = xkb_state_serialize_layout(
+    state.xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
+  zwp_virtual_keyboard_v1_modifiers(state.virt_kb, depressed_mods,
+    latched_mods, locked_mods, effective_group);
+  zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key_code,
+    key_state);
+
+  /*
+   * Generally, X11 and Wayland turn an LED on after a key press, and
+   * off after a key release. The exact reason for this is unclear, but
+   * we mimic that behavior here to make sure we don't trip any weird
+   * edge cases that depend on this.
+   */
+  if (key_code == KEY_NUMLOCK) {
+    if (key_state == LIBINPUT_KEY_STATE_PRESSED
+      && !num_lock_held) {
+      num_lock_held = true;
+      num_lock_state += 1;
+    } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+      num_lock_held = false;
+      num_lock_state += 1;
+    }
+    if (num_lock_state == 4) {
+      num_lock_state = 0;
+    }
+  } else if (key_code == KEY_CAPSLOCK) {
+    if (key_state == LIBINPUT_KEY_STATE_PRESSED
+      && !caps_lock_held) {
+      caps_lock_held = true;
+      caps_lock_state += 1;
+    } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+      caps_lock_held = false;
+      caps_lock_state += 1;
+    }
+    if (caps_lock_state == 4) {
+      caps_lock_state = 0;
+    }
+  }
+  if (num_lock_state != 0) {
+    led_state |= LIBINPUT_LED_NUM_LOCK;
+  }
+  if (caps_lock_state != 0) {
+    led_state |= LIBINPUT_LED_CAPS_LOCK;
+  }
+  if (led_state != last_led_state) {
+    struct li_device_info *trav_li_device_info = NULL;
+    last_led_state = led_state;
+    LIST_FOREACH(trav_li_device_info, &ldi_head, ldi_entries) {
+      libinput_device_led_update(trav_li_device_info->device, led_state);
+    }
+  }
+}
+
 static void handle_libinput_event(struct libinput_event *li_event,
   uint32_t ts_milliseconds) {
-  bool mouse_event_handled = false;
   enum libinput_event_type ev_type = libinput_event_get_type(li_event);
   struct libinput_device *ev_device = libinput_event_get_device(li_event);
   struct li_device_info *ev_device_info = libinput_device_get_user_data(
@@ -2139,105 +2236,17 @@ static void handle_libinput_event(struct libinput_event *li_event,
     uint32_t button_code = libinput_event_pointer_get_button(pointer_event);
     enum libinput_button_state button_state
       = libinput_event_pointer_get_button_state(pointer_event);
-
-    mouse_event_handled = true;
-
-    if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
-      /*
-       * Both libinput and zwlr_virtual_pointer_v1 use evdev event codes to
-       * identify the button pressed, so we can just pass the data from
-       * libinput straight through.
-       */
-      zwlr_virtual_pointer_v1_button(
-        state.virt_pointer, ts_milliseconds, button_code,
-        WL_POINTER_BUTTON_STATE_PRESSED);
-    } else {
-      zwlr_virtual_pointer_v1_button(
-        state.virt_pointer, ts_milliseconds, button_code,
-        WL_POINTER_BUTTON_STATE_RELEASED);
-    }
+    handle_pointer_button_event(ts_milliseconds, button_code, button_state);
 
   } else if (ev_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
     if (state.virt_kb_keymap_set) {
       struct libinput_event_keyboard *kb_event
         = libinput_event_get_keyboard_event(li_event);
-      uint32_t key = libinput_event_keyboard_get_key(kb_event);
+      uint32_t key_code = libinput_event_keyboard_get_key(kb_event);
       enum libinput_key_state key_state
         = libinput_event_keyboard_get_key_state(kb_event);
-      enum libinput_led led_state = 0;
-      xkb_mod_mask_t depressed_mods;
-      xkb_mod_mask_t latched_mods;
-      xkb_mod_mask_t locked_mods;
-      xkb_layout_index_t effective_group;
-
-      if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
-        /*
-         * XKB keycodes == evdev keycodes + 8. Why this design decision was
-         * made, I have no idea.
-         */
-        xkb_state_update_key(state.xkb_state, key + 8, XKB_KEY_DOWN);
-      } else {
-        xkb_state_update_key(state.xkb_state, key + 8, XKB_KEY_UP);
-      }
-      depressed_mods = xkb_state_serialize_mods(
-        state.xkb_state, XKB_STATE_MODS_DEPRESSED);
-      latched_mods = xkb_state_serialize_mods(
-        state.xkb_state, XKB_STATE_MODS_LATCHED);
-      locked_mods = xkb_state_serialize_mods(
-        state.xkb_state, XKB_STATE_MODS_LOCKED);
-      effective_group = xkb_state_serialize_layout(
-        state.xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
-      zwp_virtual_keyboard_v1_modifiers(state.virt_kb, depressed_mods,
-        latched_mods, locked_mods, effective_group);
-      zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key,
-        key_state);
-
-      /*
-       * Generally, X11 and Wayland turn an LED on after a key press, and
-       * off after a key release. The exact reason for this is unclear, but
-       * we mimic that behavior here to make sure we don't trip any weird
-       * edge cases that depend on this.
-       */
-      if (key == KEY_NUMLOCK) {
-        if (key_state == LIBINPUT_KEY_STATE_PRESSED
-          && !ev_device_info->num_lock_held) {
-          ev_device_info->num_lock_held = true;
-          ev_device_info->num_lock_state += 1;
-        } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
-          ev_device_info->num_lock_held = false;
-          ev_device_info->num_lock_state += 1;
-        }
-        if (ev_device_info->num_lock_state == 4) {
-          ev_device_info->num_lock_state = 0;
-        }
-      } else if (key == KEY_CAPSLOCK) {
-        if (key_state == LIBINPUT_KEY_STATE_PRESSED
-          && !ev_device_info->caps_lock_held) {
-          ev_device_info->caps_lock_held = true;
-          ev_device_info->caps_lock_state += 1;
-        } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
-          ev_device_info->caps_lock_held = false;
-          ev_device_info->caps_lock_state += 1;
-        }
-        if (ev_device_info->caps_lock_state == 4) {
-          ev_device_info->caps_lock_state = 0;
-        }
-      }
-      if (ev_device_info->num_lock_state != 0) {
-        led_state |= LIBINPUT_LED_NUM_LOCK;
-      }
-      if (ev_device_info->caps_lock_state != 0) {
-        led_state |= LIBINPUT_LED_CAPS_LOCK;
-      }
-      if (led_state != ev_device_info->last_led_state) {
-        ev_device_info->last_led_state = led_state;
-        libinput_device_led_update(ev_device, led_state);
-      }
+      handle_key_event(ts_milliseconds, key_code, key_state);
     }
-  }
-
-  if (mouse_event_handled) {
-    zwlr_virtual_pointer_v1_frame(state.virt_pointer);
   }
 
   li_device_info_unref(ev_device_info);
@@ -2306,6 +2315,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   double horiz_scroll_val = 0.0;
 
   if (li_event_type == LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE) {
+    printf("MOTION_ABSOLUTE\n");
     pointer_event = libinput_event_get_pointer_event(li_event);
     assert(state.global_space_width >= 0);
     assert(state.global_space_height >= 0);
@@ -2324,6 +2334,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     }
 
   } else if (li_event_type == LIBINPUT_EVENT_POINTER_MOTION) {
+    printf("POINTER_MOTION\n");
     pointer_event = libinput_event_get_pointer_event(li_event);
     rel_x = libinput_event_pointer_get_dx(pointer_event);
     rel_y = libinput_event_pointer_get_dy(pointer_event);
@@ -2413,6 +2424,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
    * one for each dimension.
    */
   } else if (li_event_type == LIBINPUT_EVENT_POINTER_SCROLL_WHEEL) {
+    printf("SCROLL_WHEEL\n");
     pointer_event = libinput_event_get_pointer_event(li_event);
     if (libinput_event_pointer_has_axis(pointer_event,
       LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
@@ -2434,6 +2446,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
 
   } else if ((li_event_type == LIBINPUT_EVENT_POINTER_SCROLL_FINGER)
     || (li_event_type == LIBINPUT_EVENT_POINTER_SCROLL_CONTINUOUS)) {
+    printf("SCROLL_FINGER|CONTINUOUS\n");
     pointer_event = libinput_event_get_pointer_event(li_event);
     if (libinput_event_pointer_has_axis(pointer_event,
       LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
@@ -2476,6 +2489,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     enum libinput_event_type trackq_li_event_type = LIBINPUT_EVENT_NONE;
 
     if (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
+      printf("POINTER_BUTTON\n");
       /*
        * If this is a mousedown event, ignore it if there are multiple of the
        * same button being held down across multiple devices. For mouseup,
@@ -2497,6 +2511,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
         return;
       }
     } else if (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+      printf("KEYBOARD_KEY\n");
       /* Same logic as above, but for keys. */
       kb_event = libinput_event_get_keyboard_event(li_event);
       key_state = libinput_event_keyboard_get_key_state(kb_event);
@@ -2530,18 +2545,20 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
      */
     if (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
       if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
+        printf("BUTTON_STATE_PRESSED %u\n", libinput_event_pointer_get_button(pointer_button_event));
         input_packet_ref(ev_packet);
         li_device_info_ref(ev_device_info);
-        TAILQ_INSERT_TAIL(&ev_device_info->trackq_head, ev_packet, entries);
+        TAILQ_INSERT_TAIL(&ev_device_info->trackq_head, ev_packet, trackq_entries);
       } else if (button_state == LIBINPUT_BUTTON_STATE_RELEASED) {
         uint32_t released_button_code = libinput_event_pointer_get_button(
           pointer_button_event);
         struct libinput_event_pointer *pressed_li_event = NULL;
         uint32_t pressed_button_code = 0;
+        printf("BUTTON_STATE_RELEASED %u\n", released_button_code);
         check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
 
         while (check_packet != NULL) {
-          next_check_packet = TAILQ_NEXT(check_packet, entries);
+          next_check_packet = TAILQ_NEXT(check_packet, trackq_entries);
           trackq_li_event_type = libinput_event_get_type(
             check_packet->data.libinput.li_event);
 
@@ -2557,18 +2574,10 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
                   check_packet->data.libinput.li_event);
               struct li_device_info *check_packet_device_info
                 = libinput_device_get_user_data(check_packet_device);
-              /* FIXME: This TAILQ_REMOVE call is silently failing for an unknown
-               * reason. This results in an assertion failure the second time a
-               * mouse button is released, and causes numerous use-after-free
-               * issues according to Valgrind. Uncomment the block of code
-               * a few lines below to verify. */
               TAILQ_REMOVE(&ev_device_info->trackq_head, check_packet,
-                entries);
+                trackq_entries);
               input_packet_unref(check_packet);
               li_device_info_unref(check_packet_device_info);
-              /*printf("Before: %lu\n", (uint64_t)check_packet);
-              check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
-              printf("After: %lu\n", (uint64_t)check_packet);*/
               break;
             }
           }
@@ -2577,17 +2586,19 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
       }
     } else if (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
       if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
+        printf("KEY_STATE_PRESSED %u\n", libinput_event_keyboard_get_key(kb_event));
         input_packet_ref(ev_packet);
         li_device_info_ref(ev_device_info);
-        TAILQ_INSERT_TAIL(&(ev_device_info->trackq_head), ev_packet, entries);
+        TAILQ_INSERT_TAIL(&ev_device_info->trackq_head, ev_packet, trackq_entries);
       } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
         uint32_t released_key_code = libinput_event_keyboard_get_key(kb_event);
         struct libinput_event_keyboard *pressed_li_event = NULL;
         uint32_t pressed_key_code = 0;
-        check_packet = TAILQ_FIRST(&(ev_device_info->trackq_head));
+        printf("KEY_STATE_RELEASED %u\n", released_key_code);
+        check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
 
         while (check_packet != NULL) {
-          next_check_packet = TAILQ_NEXT(check_packet, entries);
+          next_check_packet = TAILQ_NEXT(check_packet, trackq_entries);
           trackq_li_event_type = libinput_event_get_type(
             check_packet->data.libinput.li_event);
 
@@ -2603,18 +2614,10 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
                   check_packet->data.libinput.li_event);
               struct li_device_info *check_packet_device_info
                 = libinput_device_get_user_data(check_packet_device);
-              /* FIXME: This TAILQ_REMOVE call is silently failing for an unknown
-               * reason. This results in an assertion failure the second time a
-               * key is released, and causes numerous use-after-free issues
-               * according to Valgrind. Uncomment the block of code a few lines
-               * below to verify. */
               TAILQ_REMOVE(&ev_device_info->trackq_head, check_packet,
-                entries);
+                trackq_entries);
               input_packet_unref(check_packet);
               li_device_info_unref(check_packet_device_info);
-              /*printf("Before: %lu\n", (uint64_t)check_packet);
-              check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
-              printf("After: %lu\n", (uint64_t)check_packet);*/
               break;
             }
           }
@@ -2633,13 +2636,20 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     struct input_packet *check_packet = NULL;
     struct input_packet *next_check_packet = NULL;
     enum libinput_event_type check_packet_type = LIBINPUT_EVENT_NONE;
+    printf("DEVICE_REMOVED\n");
 
     ev_device = libinput_event_get_device(li_event);
     ev_device_info = libinput_device_get_user_data(ev_device);
+    /* Device info will be NULL if there are no pending key events. */
+    if (ev_device_info == NULL) {
+      libinput_event_destroy(li_event);
+      return;
+    }
     check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
 
     while (check_packet != NULL) {
-      next_check_packet = TAILQ_NEXT(check_packet, entries);
+      printf("hit\n");
+      next_check_packet = TAILQ_NEXT(check_packet, trackq_entries);
       ev_packet = safe_calloc(1, sizeof(struct input_packet));
       ev_packet->refcount = 1;
       ev_packet->packet_type = KLOAK_PACKET_TYPE_FAKE_LIBINPUT;
@@ -2664,15 +2674,11 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
         ev_packet->data.fake_libinput.button_code
           = libinput_event_keyboard_get_key(pressed_li_event);
       } else {
-        fprintf(stderr,
-          "FATAL ERROR: Unrecognized event type %ld found in device-specific tracking queue! Please report this bug!\n",
-          (int64_t)check_packet_type);
-        exit(1);
+        assert(false);
       }
 
       queue_input_event(ev_packet);
 
-      printf("Called!\n");
       input_packet_unref(check_packet);
       /*
        * Each packet will hold a reference to this device's info, so we don't
@@ -2703,74 +2709,61 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
 
 static void release_scheduled_input_events(void) {
   int64_t current_time = current_time_ms();
-  struct input_packet *packet = NULL;
+  struct input_packet *ev_packet = NULL;
 
-  while ((packet = TAILQ_FIRST(&evq_head))
-    && (current_time >= packet->sched_time)) {
+  while ((ev_packet = TAILQ_FIRST(&evq_head))
+    && (current_time >= ev_packet->sched_time)) {
     /*
      * These conditionals are intentionally ordered so that more common events
      * are processed earlier, don't re-order them unless you have to.
      */
-    if (packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE) {
-      assert(packet->sched_time >= 0);
-      if (packet->sched_time > UINT32_MAX) {
-        fprintf(stderr,
-          "packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
-        exit(0);
-      }
+    assert(ev_packet->sched_time >= 0);
+    if (ev_packet->sched_time > UINT32_MAX) {
+      fprintf(stderr,
+        "ev_packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
+      exit(0);
+    }
+    if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE) {
       assert(state.pointer_space_x >= 0);
       assert(state.pointer_space_y >= 0);
-      assert(packet->data.mousemove.cursor_x >= state.pointer_space_x);
-      assert(packet->data.mousemove.cursor_y >= state.pointer_space_y);
+      assert(ev_packet->data.mousemove.cursor_x >= state.pointer_space_x);
+      assert(ev_packet->data.mousemove.cursor_y >= state.pointer_space_y);
       assert(state.global_space_width >= state.pointer_space_x);
       assert(state.global_space_height >= state.pointer_space_y);
       zwlr_virtual_pointer_v1_motion_absolute(
-        state.virt_pointer, (uint32_t)(packet->sched_time),
-        (uint32_t)(packet->data.mousemove.cursor_x - state.pointer_space_x),
-        (uint32_t)(packet->data.mousemove.cursor_y - state.pointer_space_y),
+        state.virt_pointer, (uint32_t)(ev_packet->sched_time),
+        (uint32_t)(ev_packet->data.mousemove.cursor_x - state.pointer_space_x),
+        (uint32_t)(ev_packet->data.mousemove.cursor_y - state.pointer_space_y),
         (uint32_t)(state.global_space_width - state.pointer_space_x),
         (uint32_t)(state.global_space_height - state.pointer_space_y));
       zwlr_virtual_pointer_v1_frame(state.virt_pointer);
 
-    } else if (packet->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
-      assert(packet->sched_time >= 0);
-      if (packet->sched_time > UINT32_MAX) {
-        fprintf(stderr,
-          "packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
-        exit(0);
-      }
-      handle_libinput_event(packet->data.libinput.li_event,
-        (uint32_t)(packet->sched_time));
+    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
+      handle_libinput_event(ev_packet->data.libinput.li_event,
+        (uint32_t)(ev_packet->sched_time));
 
-    } else { /* packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL */
+    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL) {
       bool send_axis_source_and_frame = false;
-      assert(packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL);
-      assert(packet->sched_time >= 0);
-      if (packet->sched_time > UINT32_MAX) {
-        fprintf(stderr,
-          "packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
-        exit(0);
-      }
-      if (packet->data.mousescroll.vert_scroll_ticks != 0) {
+      if (ev_packet->data.mousescroll.vert_scroll_ticks != 0) {
         zwlr_virtual_pointer_v1_axis(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
-          wl_fixed_from_int(packet->data.mousescroll.vert_scroll_ticks
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
+          wl_fixed_from_int(ev_packet->data.mousescroll.vert_scroll_ticks
             * SCROLL_ANGLE_PER_TICK));
         zwlr_virtual_pointer_v1_axis_discrete(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
           wl_fixed_from_int(SCROLL_ANGLE_PER_TICK),
-          packet->data.mousescroll.vert_scroll_ticks);
+          ev_packet->data.mousescroll.vert_scroll_ticks);
         send_axis_source_and_frame = true;
       }
-      if (packet->data.mousescroll.horiz_scroll_ticks != 0) {
+      if (ev_packet->data.mousescroll.horiz_scroll_ticks != 0) {
         zwlr_virtual_pointer_v1_axis(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
-          wl_fixed_from_int(packet->data.mousescroll.horiz_scroll_ticks
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+          wl_fixed_from_int(ev_packet->data.mousescroll.horiz_scroll_ticks
             * SCROLL_ANGLE_PER_TICK));
         zwlr_virtual_pointer_v1_axis_discrete(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
           wl_fixed_from_int(SCROLL_ANGLE_PER_TICK),
-            packet->data.mousescroll.horiz_scroll_ticks);
+            ev_packet->data.mousescroll.horiz_scroll_ticks);
         send_axis_source_and_frame = true;
       }
       if (send_axis_source_and_frame) {
@@ -2778,9 +2771,22 @@ static void release_scheduled_input_events(void) {
           WL_POINTER_AXIS_SOURCE_WHEEL);
         zwlr_virtual_pointer_v1_frame(state.virt_pointer);
       }
+    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_FAKE_LIBINPUT) {
+      struct ip_fake_libinput *ev_info = &ev_packet->data.fake_libinput;
+      if (ev_info->event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
+        handle_pointer_button_event((uint32_t)(ev_packet->sched_time),
+          ev_info->button_code, ev_info->button_state);
+      } else if (ev_info->event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+        handle_key_event((uint32_t)(ev_packet->sched_time),
+          ev_info->button_code, ev_info->key_state);
+      } else {
+        assert(false);
+      }
+    } else {
+      assert(false);
     }
-    TAILQ_REMOVE(&evq_head, packet, entries);
-    input_packet_unref(packet);
+    TAILQ_REMOVE(&evq_head, ev_packet, evq_entries);
+    input_packet_unref(ev_packet);
   }
 }
 
@@ -3362,6 +3368,7 @@ int main(int argc, char **argv) {
     }
 
     /* Control never reaches this point. */
+    assert(false);
   } else {
     while(true) {
       while (true) {
