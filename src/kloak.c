@@ -3036,8 +3036,8 @@ int main(int argc, char **argv) {
 
   applayer_random_init();
   applayer_wayland_init();
-  applayer_libinput_init();
   applayer_inotify_init();
+  applayer_libinput_init();
   applayer_poll_init();
 
   if (did_wayland_init) {
