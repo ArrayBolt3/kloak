@@ -314,12 +314,6 @@ static int64_t current_time_ms(void);
 static int64_t random_between(int64_t lower, int64_t upper);
 
 /*
- * Determine if a point falls inside an area.
- */
-static bool check_point_in_area(int32_t x, int32_t y, int32_t rect_x,
-  int32_t rect_y, int32_t rect_width, int32_t rect_height);
-
-/*
  * Determine if two screens are touching or overlapping given their
  * geometries.
  */
