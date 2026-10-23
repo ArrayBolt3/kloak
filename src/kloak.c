@@ -349,12 +349,32 @@ static void safe_closedir(DIR *dirp) {
   }
 }
 
+static void input_packet_ref(struct input_packet *ip) {
+  ip->refcount += 1;
+  printf("Reffed %lu %u\n", (uint64_t)ip, ip->refcount);
+  assert(ip->refcount != 0);
+}
+
+static void input_packet_unref(struct input_packet *ip) {
+  ip->refcount -= 1;
+  printf("Unreffed %lu %u\n", (uint64_t)ip, ip->refcount);
+  assert(ip->refcount != UINT32_MAX);
+  if (ip->refcount == 0) {
+    if (ip->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
+      libinput_event_destroy(ip->data.libinput.li_event);
+    }
+    free(ip);
+  }
+}
+
 static void li_device_info_ref(struct li_device_info *ldi) {
   ldi->refcount += 1;
+  assert(ldi->refcount != 0);
 }
 
 static void li_device_info_unref(struct li_device_info *ldi) {
   ldi->refcount -= 1;
+  assert(ldi->refcount != UINT32_MAX);
   if (ldi->refcount == 0) {
     /*
      * The user data for a device is the struct we're freeing, so NULL out the
@@ -1083,6 +1103,7 @@ static void attach_input_device(const char *dev_name) {
   ldi_node->caps_lock_held = false;
   ldi_node->last_led_state = 0;
   ldi_node->refcount = 1;
+  TAILQ_INIT(&ldi_node->trackq_head);
   libinput_device_set_user_data(new_device, ldi_node);
   LIST_INSERT_HEAD(&ldi_head, ldi_node, entries);
 }
@@ -1244,6 +1265,19 @@ static void display_sync_maybe(struct disp_state *param_state) {
   recalc_global_space(param_state);
 }
 
+static void queue_input_event(struct input_packet *ev_packet) {
+  int64_t current_time = 0;
+  int64_t lower_bound = 0;
+  int64_t random_delay = 0;
+
+  current_time = current_time_ms();
+  lower_bound = min(max(prev_release_time - current_time, 0), max_delay);
+  random_delay = random_between(lower_bound, max_delay);
+  ev_packet->sched_time = current_time + random_delay;
+  TAILQ_INSERT_TAIL(&evq_head, ev_packet, entries);
+  prev_release_time = ev_packet->sched_time;
+}
+
 /********************/
 /* wayland handling */
 /********************/
@@ -1259,7 +1293,8 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
       &wl_compositor_interface, 5);
   } else if (strcmp(interface, wl_seat_interface.name) == 0) {
     if (!param_state->seat_set) {
-      param_state->seat = wl_registry_bind(registry, name, &wl_seat_interface, 9);
+      param_state->seat = wl_registry_bind(
+        registry, name, &wl_seat_interface, 9);
       param_state->seat_set = true;
     } else {
       fprintf(stderr,
@@ -1275,7 +1310,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         param_state->outputs[i] = wl_registry_bind(registry, name,
           &wl_output_interface, 4);
         param_state->output_names[i] = name;
-	if (did_wayland_init) {
+        if (did_wayland_init) {
           wl_init_new_display(param_state, i);
         }
         new_output_assigned = true;
@@ -2044,6 +2079,7 @@ static struct input_packet * update_virtual_cursor(void) {
     return NULL;
   } else {
     ev_packet = safe_calloc(1, sizeof(struct input_packet));
+    ev_packet->refcount = 1;
     ev_packet->packet_type = KLOAK_PACKET_TYPE_MOUSEMOVE;
     ev_packet->data.mousemove.cursor_x = (int32_t)(cursor_x);
     ev_packet->data.mousemove.cursor_y = (int32_t)(cursor_y);
@@ -2067,6 +2103,7 @@ static struct input_packet *update_mouse_scroll(void) {
       return NULL;
     } else {
       ev_packet = safe_calloc(1, sizeof(struct input_packet));
+      ev_packet->refcount = 1;
       ev_packet->packet_type = KLOAK_PACKET_TYPE_MOUSESCROLL;
       ev_packet->data.mousescroll.vert_scroll_ticks = vert_scroll_ticks;
       ev_packet->data.mousescroll.horiz_scroll_ticks = horiz_scroll_ticks;
@@ -2204,7 +2241,10 @@ static void handle_libinput_event(struct libinput_event *li_event,
   }
 
   li_device_info_unref(ev_device_info);
-  libinput_event_destroy(li_event);
+  /*
+   * The event is intentionally not destroyed here. It will be destroyed when
+   * the input_packet it is part of is freed.
+   */
 }
 
 static void register_esc_combo_event(struct libinput_event *li_event) {
@@ -2264,9 +2304,6 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   double rel_y = 0.0;
   double vert_scroll_val = 0.0;
   double horiz_scroll_val = 0.0;
-  int64_t current_time = 0;
-  int64_t lower_bound = 0;
-  int64_t random_delay = 0;
 
   if (li_event_type == LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE) {
     pointer_event = libinput_event_get_pointer_event(li_event);
@@ -2428,6 +2465,15 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   } else if ((li_event_type == LIBINPUT_EVENT_DEVICE_ADDED)
     || (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON)
     || (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY)) {
+    struct libinput_event_pointer *pointer_button_event = NULL;
+    enum libinput_button_state button_state = LIBINPUT_BUTTON_STATE_RELEASED;
+    uint32_t button_held_count = 0;
+    struct libinput_event_keyboard *kb_event = NULL;
+    enum libinput_key_state key_state = LIBINPUT_KEY_STATE_RELEASED;
+    uint32_t key_held_count = 0;
+    struct input_packet *check_packet = NULL;
+    struct input_packet *next_check_packet = NULL;
+    enum libinput_event_type trackq_li_event_type = LIBINPUT_EVENT_NONE;
 
     if (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
       /*
@@ -2436,12 +2482,11 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
        * ignore the event if not all instances of the button have been
        * released.
        */
-      struct libinput_event_pointer *pointer_button_event =
-        libinput_event_get_pointer_event(li_event);
-      enum libinput_button_state button_state
-        = libinput_event_pointer_get_button_state(pointer_button_event);
-      uint32_t button_held_count
-        = libinput_event_pointer_get_seat_button_count(pointer_button_event);
+      pointer_button_event = libinput_event_get_pointer_event(li_event);
+      button_state = libinput_event_pointer_get_button_state(
+        pointer_button_event);
+      button_held_count = libinput_event_pointer_get_seat_button_count(
+        pointer_button_event);
       if (
         (button_state == LIBINPUT_BUTTON_STATE_PRESSED
           && button_held_count > 1)
@@ -2453,12 +2498,9 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
       }
     } else if (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
       /* Same logic as above, but for keys. */
-      struct libinput_event_keyboard *kb_event
-        = libinput_event_get_keyboard_event(li_event);
-      enum libinput_key_state key_state
-        = libinput_event_keyboard_get_key_state(kb_event);
-      uint32_t key_held_count
-        = libinput_event_keyboard_get_seat_key_count(kb_event);
+      kb_event = libinput_event_get_keyboard_event(li_event);
+      key_state = libinput_event_keyboard_get_key_state(kb_event);
+      key_held_count = libinput_event_keyboard_get_seat_key_count(kb_event);
       if (
         (key_state == LIBINPUT_KEY_STATE_PRESSED
           && key_held_count > 1)
@@ -2470,18 +2512,181 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
       }
     }
 
+    /* Build the event packet. */
     ev_packet = safe_calloc(1, sizeof(struct input_packet));
-    if (ev_packet == NULL) {
-      fprintf(stderr,
-        "FATAL ERROR: Could not allocate memory for libinput event packet!\n");
-      exit(1);
-    }
+    ev_packet->refcount = 1;
     ev_packet->packet_type = KLOAK_PACKET_TYPE_LIBINPUT;
     ev_packet->data.libinput.li_event = li_event;
     ev_device = libinput_event_get_device(li_event);
     ev_device_info = libinput_device_get_user_data(ev_device);
     assert(ev_device_info != NULL);
     li_device_info_ref(ev_device_info);
+
+    /*
+     * Track button/key-down/up events so that we can handle device removal.
+     * When a press event is received, we add it to the tracking queue. When a
+     * release event is received, we find its corresponding press event and
+     * remove it if it exists.
+     */
+    if (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
+      if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
+        input_packet_ref(ev_packet);
+        li_device_info_ref(ev_device_info);
+        TAILQ_INSERT_TAIL(&ev_device_info->trackq_head, ev_packet, entries);
+      } else if (button_state == LIBINPUT_BUTTON_STATE_RELEASED) {
+        uint32_t released_button_code = libinput_event_pointer_get_button(
+          pointer_button_event);
+        struct libinput_event_pointer *pressed_li_event = NULL;
+        uint32_t pressed_button_code = 0;
+        check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
+
+        while (check_packet != NULL) {
+          next_check_packet = TAILQ_NEXT(check_packet, entries);
+          trackq_li_event_type = libinput_event_get_type(
+            check_packet->data.libinput.li_event);
+
+          if (trackq_li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
+            pressed_li_event = libinput_event_get_pointer_event(
+              check_packet->data.libinput.li_event);
+            pressed_button_code = libinput_event_pointer_get_button(
+              pressed_li_event);
+
+            if (pressed_button_code == released_button_code) {
+              struct libinput_device *check_packet_device
+                = libinput_event_get_device(
+                  check_packet->data.libinput.li_event);
+              struct li_device_info *check_packet_device_info
+                = libinput_device_get_user_data(check_packet_device);
+              /* FIXME: This TAILQ_REMOVE call is silently failing for an unknown
+               * reason. This results in an assertion failure the second time a
+               * mouse button is released, and causes numerous use-after-free
+               * issues according to Valgrind. Uncomment the block of code
+               * a few lines below to verify. */
+              TAILQ_REMOVE(&ev_device_info->trackq_head, check_packet,
+                entries);
+              input_packet_unref(check_packet);
+              li_device_info_unref(check_packet_device_info);
+              /*printf("Before: %lu\n", (uint64_t)check_packet);
+              check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
+              printf("After: %lu\n", (uint64_t)check_packet);*/
+              break;
+            }
+          }
+          check_packet = next_check_packet;
+        }
+      }
+    } else if (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+      if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
+        input_packet_ref(ev_packet);
+        li_device_info_ref(ev_device_info);
+        TAILQ_INSERT_TAIL(&(ev_device_info->trackq_head), ev_packet, entries);
+      } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+        uint32_t released_key_code = libinput_event_keyboard_get_key(kb_event);
+        struct libinput_event_keyboard *pressed_li_event = NULL;
+        uint32_t pressed_key_code = 0;
+        check_packet = TAILQ_FIRST(&(ev_device_info->trackq_head));
+
+        while (check_packet != NULL) {
+          next_check_packet = TAILQ_NEXT(check_packet, entries);
+          trackq_li_event_type = libinput_event_get_type(
+            check_packet->data.libinput.li_event);
+
+          if (trackq_li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+            pressed_li_event = libinput_event_get_keyboard_event(
+              check_packet->data.libinput.li_event);
+            pressed_key_code = libinput_event_keyboard_get_key(
+              pressed_li_event);
+
+            if (pressed_key_code == released_key_code) {
+              struct libinput_device *check_packet_device
+                = libinput_event_get_device(
+                  check_packet->data.libinput.li_event);
+              struct li_device_info *check_packet_device_info
+                = libinput_device_get_user_data(check_packet_device);
+              /* FIXME: This TAILQ_REMOVE call is silently failing for an unknown
+               * reason. This results in an assertion failure the second time a
+               * key is released, and causes numerous use-after-free issues
+               * according to Valgrind. Uncomment the block of code a few lines
+               * below to verify. */
+              TAILQ_REMOVE(&ev_device_info->trackq_head, check_packet,
+                entries);
+              input_packet_unref(check_packet);
+              li_device_info_unref(check_packet_device_info);
+              /*printf("Before: %lu\n", (uint64_t)check_packet);
+              check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
+              printf("After: %lu\n", (uint64_t)check_packet);*/
+              break;
+            }
+          }
+          check_packet = next_check_packet;
+        }
+      }
+    }
+
+  /*
+   * Generate button-key/up events in the event queue for each event in a
+   * removed device's tracking queue. We don't have to worry about other
+   * devices with events that have to do with the same key, since there will
+   * only ever be one of any particular event "in flight" at the same time.
+   */
+  } else if (li_event_type == LIBINPUT_EVENT_DEVICE_REMOVED) {
+    struct input_packet *check_packet = NULL;
+    struct input_packet *next_check_packet = NULL;
+    enum libinput_event_type check_packet_type = LIBINPUT_EVENT_NONE;
+
+    ev_device = libinput_event_get_device(li_event);
+    ev_device_info = libinput_device_get_user_data(ev_device);
+    check_packet = TAILQ_FIRST(&ev_device_info->trackq_head);
+
+    while (check_packet != NULL) {
+      next_check_packet = TAILQ_NEXT(check_packet, entries);
+      ev_packet = safe_calloc(1, sizeof(struct input_packet));
+      ev_packet->refcount = 1;
+      ev_packet->packet_type = KLOAK_PACKET_TYPE_FAKE_LIBINPUT;
+      check_packet_type = libinput_event_get_type(
+        check_packet->data.libinput.li_event);
+      ev_packet->data.fake_libinput.event_type = check_packet_type;
+
+      if (check_packet_type == LIBINPUT_EVENT_POINTER_BUTTON) {
+        struct libinput_event_pointer *pressed_li_event
+          = libinput_event_get_pointer_event(
+            check_packet->data.libinput.li_event);
+        ev_packet->data.fake_libinput.button_state
+          = LIBINPUT_BUTTON_STATE_RELEASED;
+        ev_packet->data.fake_libinput.button_code
+          = libinput_event_pointer_get_button(pressed_li_event);
+
+      } else if (check_packet_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+        struct libinput_event_keyboard *pressed_li_event
+          = libinput_event_get_keyboard_event(
+            check_packet->data.libinput.li_event);
+        ev_packet->data.fake_libinput.key_state = LIBINPUT_KEY_STATE_RELEASED;
+        ev_packet->data.fake_libinput.button_code
+          = libinput_event_keyboard_get_key(pressed_li_event);
+      } else {
+        fprintf(stderr,
+          "FATAL ERROR: Unrecognized event type %ld found in device-specific tracking queue! Please report this bug!\n",
+          (int64_t)check_packet_type);
+        exit(1);
+      }
+
+      queue_input_event(ev_packet);
+
+      printf("Called!\n");
+      input_packet_unref(check_packet);
+      /*
+       * Each packet will hold a reference to this device's info, so we don't
+       * need to dig the device's info out of each event prior to freeing.
+       */
+      li_device_info_unref(ev_device_info);
+
+      check_packet = next_check_packet;
+    }
+
+    /* This event isn't useful to the event release code. */
+    libinput_event_destroy(li_event);
+    return;
+
   } else {
     /*
      * Other libinput events (like gestures) can't actually be passed through
@@ -2493,12 +2698,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     return;
   }
 
-  current_time = current_time_ms();
-  lower_bound = min(max(prev_release_time - current_time, 0), max_delay);
-  random_delay = random_between(lower_bound, max_delay);
-  ev_packet->sched_time = current_time + random_delay;
-  TAILQ_INSERT_TAIL(&evq_head, ev_packet, entries);
-  prev_release_time = ev_packet->sched_time;
+  queue_input_event(ev_packet);
 }
 
 static void release_scheduled_input_events(void) {
@@ -2580,7 +2780,7 @@ static void release_scheduled_input_events(void) {
       }
     }
     TAILQ_REMOVE(&evq_head, packet, entries);
-    free(packet);
+    input_packet_unref(packet);
   }
 }
 
