@@ -351,10 +351,12 @@ static void safe_closedir(DIR *dirp) {
 
 static void li_device_info_ref(struct li_device_info *ldi) {
   ldi->refcount += 1;
+  assert(ldi->refcount != 0);
 }
 
 static void li_device_info_unref(struct li_device_info *ldi) {
   ldi->refcount -= 1;
+  assert(ldi->refcount != UINT32_MAX);
   if (ldi->refcount == 0) {
     /*
      * The user data for a device is the struct we're freeing, so NULL out the
@@ -992,7 +994,7 @@ static void attach_input_device(const char *dev_name) {
       found_device = true;
       break;
     }
-    ldi_node = LIST_NEXT(ldi_node, entries);
+    ldi_node = LIST_NEXT(ldi_node, ldi_entries);
   }
 
   if (found_device) {
@@ -1027,7 +1029,7 @@ static void attach_input_device(const char *dev_name) {
   ldi_node->last_led_state = 0;
   ldi_node->refcount = 1;
   libinput_device_set_user_data(new_device, ldi_node);
-  LIST_INSERT_HEAD(&ldi_head, ldi_node, entries);
+  LIST_INSERT_HEAD(&ldi_head, ldi_node, ldi_entries);
 }
 
 static void detach_input_device(const char *dev_name) {
@@ -1041,7 +1043,7 @@ static void detach_input_device(const char *dev_name) {
       found_device = true;
       break;
     }
-    ldi_node = LIST_NEXT(ldi_node, entries);
+    ldi_node = LIST_NEXT(ldi_node, ldi_entries);
   }
 
   if (!found_device) {
@@ -1049,7 +1051,7 @@ static void detach_input_device(const char *dev_name) {
   }
 
   dev = ldi_node->device;
-  LIST_REMOVE(ldi_node, entries);
+  LIST_REMOVE(ldi_node, ldi_entries);
   /*
    * 'ldi_node' MUST be unreferenced first, then the contained device can be
    * removed. li_device_info_unref() will null out the user data of 'dev'
@@ -1202,7 +1204,8 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
       &wl_compositor_interface, 5);
   } else if (strcmp(interface, wl_seat_interface.name) == 0) {
     if (!param_state->seat_set) {
-      param_state->seat = wl_registry_bind(registry, name, &wl_seat_interface, 9);
+      param_state->seat = wl_registry_bind(
+        registry, name, &wl_seat_interface, 9);
       param_state->seat_set = true;
     } else {
       fprintf(stderr,
@@ -1218,7 +1221,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         param_state->outputs[i] = wl_registry_bind(registry, name,
           &wl_output_interface, 4);
         param_state->output_names[i] = name;
-	if (did_wayland_init) {
+        if (did_wayland_init) {
           wl_init_new_display(param_state, i);
         }
         new_output_assigned = true;
@@ -2140,6 +2143,8 @@ static void handle_libinput_event(struct libinput_event *li_event,
         libinput_device_led_update(ev_device, led_state);
       }
     }
+  } else {
+    assert(false);
   }
 
   if (mouse_event_handled) {
@@ -2175,8 +2180,10 @@ static void register_esc_combo_event(struct libinput_event *li_event) {
 
       if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
         active_esc_key_list[i] = true;
-      } else {
+      } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
         active_esc_key_list[i] = false;
+      } else {
+        assert(false);
       }
       break;
     }
@@ -2414,11 +2421,6 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     }
 
     ev_packet = safe_calloc(1, sizeof(struct input_packet));
-    if (ev_packet == NULL) {
-      fprintf(stderr,
-        "FATAL ERROR: Could not allocate memory for libinput event packet!\n");
-      exit(1);
-    }
     ev_packet->packet_type = KLOAK_PACKET_TYPE_LIBINPUT;
     ev_packet->data.libinput.li_event = li_event;
     ev_device = libinput_event_get_device(li_event);
@@ -2440,80 +2442,67 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   lower_bound = min(max(prev_release_time - current_time, 0), max_delay);
   random_delay = random_between(lower_bound, max_delay);
   ev_packet->sched_time = current_time + random_delay;
-  TAILQ_INSERT_TAIL(&evq_head, ev_packet, entries);
+  TAILQ_INSERT_TAIL(&evq_head, ev_packet, evq_entries);
   prev_release_time = ev_packet->sched_time;
 }
 
 static void release_scheduled_input_events(void) {
   int64_t current_time = current_time_ms();
-  struct input_packet *packet = NULL;
+  struct input_packet *ev_packet = NULL;
 
-  while ((packet = TAILQ_FIRST(&evq_head))
-    && (current_time >= packet->sched_time)) {
+  while ((ev_packet = TAILQ_FIRST(&evq_head))
+    && (current_time >= ev_packet->sched_time)) {
     /*
      * These conditionals are intentionally ordered so that more common events
      * are processed earlier, don't re-order them unless you have to.
      */
-    if (packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE) {
-      assert(packet->sched_time >= 0);
-      if (packet->sched_time > UINT32_MAX) {
-        fprintf(stderr,
-          "packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
-        exit(0);
-      }
+    assert(ev_packet->sched_time >= 0);
+    if (ev_packet->sched_time > UINT32_MAX) {
+      fprintf(stderr,
+        "ev_packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
+      exit(0);
+    }
+    if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE) {
       assert(state.pointer_space_x >= 0);
       assert(state.pointer_space_y >= 0);
-      assert(packet->data.mousemove.cursor_x >= state.pointer_space_x);
-      assert(packet->data.mousemove.cursor_y >= state.pointer_space_y);
+      assert(ev_packet->data.mousemove.cursor_x >= state.pointer_space_x);
+      assert(ev_packet->data.mousemove.cursor_y >= state.pointer_space_y);
       assert(state.global_space_width >= state.pointer_space_x);
       assert(state.global_space_height >= state.pointer_space_y);
       zwlr_virtual_pointer_v1_motion_absolute(
-        state.virt_pointer, (uint32_t)(packet->sched_time),
-        (uint32_t)(packet->data.mousemove.cursor_x - state.pointer_space_x),
-        (uint32_t)(packet->data.mousemove.cursor_y - state.pointer_space_y),
+        state.virt_pointer, (uint32_t)(ev_packet->sched_time),
+        (uint32_t)(ev_packet->data.mousemove.cursor_x - state.pointer_space_x),
+        (uint32_t)(ev_packet->data.mousemove.cursor_y - state.pointer_space_y),
         (uint32_t)(state.global_space_width - state.pointer_space_x),
         (uint32_t)(state.global_space_height - state.pointer_space_y));
       zwlr_virtual_pointer_v1_frame(state.virt_pointer);
 
-    } else if (packet->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
-      assert(packet->sched_time >= 0);
-      if (packet->sched_time > UINT32_MAX) {
-        fprintf(stderr,
-          "packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
-        exit(0);
-      }
-      handle_libinput_event(packet->data.libinput.li_event,
-        (uint32_t)(packet->sched_time));
+    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
+      handle_libinput_event(ev_packet->data.libinput.li_event,
+        (uint32_t)(ev_packet->sched_time));
 
-    } else { /* packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL */
+    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL) {
       bool send_axis_source_and_frame = false;
-      assert(packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL);
-      assert(packet->sched_time >= 0);
-      if (packet->sched_time > UINT32_MAX) {
-        fprintf(stderr,
-          "packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
-        exit(0);
-      }
-      if (packet->data.mousescroll.vert_scroll_ticks != 0) {
+      if (ev_packet->data.mousescroll.vert_scroll_ticks != 0) {
         zwlr_virtual_pointer_v1_axis(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
-          wl_fixed_from_int(packet->data.mousescroll.vert_scroll_ticks
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
+          wl_fixed_from_int(ev_packet->data.mousescroll.vert_scroll_ticks
             * SCROLL_ANGLE_PER_TICK));
         zwlr_virtual_pointer_v1_axis_discrete(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
           wl_fixed_from_int(SCROLL_ANGLE_PER_TICK),
-          packet->data.mousescroll.vert_scroll_ticks);
+          ev_packet->data.mousescroll.vert_scroll_ticks);
         send_axis_source_and_frame = true;
       }
-      if (packet->data.mousescroll.horiz_scroll_ticks != 0) {
+      if (ev_packet->data.mousescroll.horiz_scroll_ticks != 0) {
         zwlr_virtual_pointer_v1_axis(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
-          wl_fixed_from_int(packet->data.mousescroll.horiz_scroll_ticks
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+          wl_fixed_from_int(ev_packet->data.mousescroll.horiz_scroll_ticks
             * SCROLL_ANGLE_PER_TICK));
         zwlr_virtual_pointer_v1_axis_discrete(state.virt_pointer,
-          (uint32_t)(packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+          (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
           wl_fixed_from_int(SCROLL_ANGLE_PER_TICK),
-            packet->data.mousescroll.horiz_scroll_ticks);
+            ev_packet->data.mousescroll.horiz_scroll_ticks);
         send_axis_source_and_frame = true;
       }
       if (send_axis_source_and_frame) {
@@ -2521,9 +2510,11 @@ static void release_scheduled_input_events(void) {
           WL_POINTER_AXIS_SOURCE_WHEEL);
         zwlr_virtual_pointer_v1_frame(state.virt_pointer);
       }
+    } else {
+      assert(false);
     }
-    TAILQ_REMOVE(&evq_head, packet, entries);
-    free(packet);
+    TAILQ_REMOVE(&evq_head, ev_packet, evq_entries);
+    free(ev_packet);
   }
 }
 
@@ -2628,7 +2619,7 @@ static void parse_esc_key_str(const char *esc_key_str) {
         esc_key_sublist_len[i], sizeof(uint32_t));
       esc_key_list[i][j] = lookup_keycode(sub_token);
       if (esc_key_list[i][j] == 0) {
-        fprintf(stderr, "FATAL ERROR: Unrecognized Key name '%s'!\n",
+        fprintf(stderr, "FATAL ERROR: Unrecognized key name '%s'!\n",
           sub_token);
         exit(1);
       }
@@ -3039,8 +3030,9 @@ int main(int argc, char **argv) {
         enum libinput_event_type next_ev_type = libinput_next_event_type(li);
         struct libinput_event *li_event = NULL;
 
-        if (next_ev_type == LIBINPUT_EVENT_NONE)
+        if (next_ev_type == LIBINPUT_EVENT_NONE) {
           break;
+        }
 
         li_event = libinput_get_event(li);
         register_esc_combo_event(li_event);
@@ -3105,14 +3097,16 @@ int main(int argc, char **argv) {
     }
 
     /* Control never reaches this point. */
+    assert(false);
   } else {
     while(true) {
       while (true) {
         enum libinput_event_type next_ev_type = libinput_next_event_type(li);
         struct libinput_event *li_event = NULL;
 
-        if (next_ev_type == LIBINPUT_EVENT_NONE)
+        if (next_ev_type == LIBINPUT_EVENT_NONE) {
           break;
+        }
 
         li_event = libinput_get_event(li);
         register_esc_combo_event(li_event);

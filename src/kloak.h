@@ -58,7 +58,7 @@ struct li_device_info {
   bool caps_lock_held;
   enum libinput_led last_led_state;
   uint32_t refcount;
-  LIST_ENTRY(li_device_info) entries;
+  LIST_ENTRY(li_device_info) ldi_entries;
 };
 
 /*
@@ -166,8 +166,7 @@ union input_packet_data {
  * - libinput events are raw events directly from libinput, intended for
  *   release unmodified at a later time.
  *
- * All kinds of events have a scheduled release time. An `entries` field is
- * included to allow buffered events to be stored in a tail queue.
+ * All kinds of events have a scheduled release time.
  *
  * The actual data of the input packet is in the `data` field. The fields of
  * `data` (mousemove, mousescroll, libinput) correspond to the
@@ -177,7 +176,7 @@ union input_packet_data {
 struct input_packet {
   enum input_packet_type packet_type;
   int64_t sched_time;
-  TAILQ_ENTRY(input_packet) entries;
+  TAILQ_ENTRY(input_packet) evq_entries;
   union input_packet_data data;
 };
 
