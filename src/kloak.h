@@ -52,11 +52,6 @@
 struct li_device_info {
   struct libinput_device *device;
   char *device_name;
-  uint8_t num_lock_state;
-  bool num_lock_held;
-  uint8_t caps_lock_state;
-  bool caps_lock_held;
-  enum libinput_led last_led_state;
   uint32_t refcount;
   LIST_ENTRY(li_device_info) ldi_entries;
 };
@@ -535,6 +530,19 @@ static struct input_packet *update_virtual_cursor(void);
  * event to reflect the new scroll quantity otherwise.
  */
 static struct input_packet *update_mouse_scroll(void);
+
+/*
+ * Processes a button press/release from either a libinput or fake libinput
+ * event.
+ */
+static void handle_pointer_button_event(uint32_t ts_milliseconds,
+  uint32_t button_code, enum libinput_button_state button_state);
+
+/*
+ * Processes a key press/release from either a libinput or fake libinput event.
+ */
+static void handle_key_event(uint32_t ts_milliseconds,
+  uint32_t key_code, enum libinput_key_state button_state);
 
 /*
  * Processes a libinput event, sending emulated input to the compositor as

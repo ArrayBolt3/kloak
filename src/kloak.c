@@ -112,6 +112,12 @@ static int64_t start_time = 0;
 
 static int randfd = 0;
 
+uint8_t num_lock_state = 0;
+bool num_lock_held = false;
+uint8_t caps_lock_state = 0;
+bool caps_lock_held = false;
+enum libinput_led last_led_state;
+
 static bool did_wayland_init = false;
 static bool exit_on_wl_connect_failure = false;
 
@@ -1022,11 +1028,6 @@ static void attach_input_device(const char *dev_name) {
   ldi_node = safe_calloc(1, sizeof(struct li_device_info));
   ldi_node->device = new_device;
   ldi_node->device_name = safe_strdup(dev_name);
-  ldi_node->num_lock_state = 0;
-  ldi_node->num_lock_held = false;
-  ldi_node->caps_lock_state = 0;
-  ldi_node->caps_lock_held = false;
-  ldi_node->last_led_state = 0;
   ldi_node->refcount = 1;
   libinput_device_set_user_data(new_device, ldi_node);
   LIST_INSERT_HEAD(&ldi_head, ldi_node, ldi_entries);
@@ -2023,9 +2024,107 @@ static struct input_packet *update_mouse_scroll(void) {
   return NULL;
 }
 
+static void handle_pointer_button_event(uint32_t ts_milliseconds,
+  uint32_t button_code, enum libinput_button_state button_state) {
+  if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
+    /*
+     * Both libinput and zwlr_virtual_pointer_v1 use evdev event codes to
+     * identify the button pressed, so we can just pass the data from
+     * libinput straight through.
+     */
+    zwlr_virtual_pointer_v1_button(
+      state.virt_pointer, ts_milliseconds, button_code,
+      WL_POINTER_BUTTON_STATE_PRESSED);
+  } else if (button_state == LIBINPUT_BUTTON_STATE_RELEASED) {
+    zwlr_virtual_pointer_v1_button(
+      state.virt_pointer, ts_milliseconds, button_code,
+      WL_POINTER_BUTTON_STATE_RELEASED);
+  } else {
+    assert(false);
+  }
+  zwlr_virtual_pointer_v1_frame(state.virt_pointer);
+}
+
+static void handle_key_event(uint32_t ts_milliseconds,
+  uint32_t key_code, enum libinput_key_state key_state) {
+  xkb_mod_mask_t depressed_mods;
+  xkb_mod_mask_t latched_mods;
+  xkb_mod_mask_t locked_mods;
+  xkb_layout_index_t effective_group;
+  enum libinput_led led_state = 0;
+
+  if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
+    /*
+     * XKB keycodes == evdev keycodes + 8. Why this design decision was
+     * made, I have no idea.
+     */
+    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_DOWN);
+  } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_UP);
+  } else {
+    assert(false);
+  }
+  depressed_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_DEPRESSED);
+  latched_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_LATCHED);
+  locked_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_LOCKED);
+  effective_group = xkb_state_serialize_layout(
+    state.xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
+  zwp_virtual_keyboard_v1_modifiers(state.virt_kb, depressed_mods,
+    latched_mods, locked_mods, effective_group);
+  zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key_code,
+    key_state);
+
+  /*
+   * Generally, X11 and Wayland turn an LED on after a key press, and
+   * off after a key release. The exact reason for this is unclear, but
+   * we mimic that behavior here to make sure we don't trip any weird
+   * edge cases that depend on this.
+   */
+  if (key_code == KEY_NUMLOCK) {
+    if (key_state == LIBINPUT_KEY_STATE_PRESSED
+      && !num_lock_held) {
+      num_lock_held = true;
+      num_lock_state += 1;
+    } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+      num_lock_held = false;
+      num_lock_state += 1;
+    }
+    if (num_lock_state == 4) {
+      num_lock_state = 0;
+    }
+  } else if (key_code == KEY_CAPSLOCK) {
+    if (key_state == LIBINPUT_KEY_STATE_PRESSED
+      && !caps_lock_held) {
+      caps_lock_held = true;
+      caps_lock_state += 1;
+    } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+      caps_lock_held = false;
+      caps_lock_state += 1;
+    }
+    if (caps_lock_state == 4) {
+      caps_lock_state = 0;
+    }
+  }
+  if (num_lock_state != 0) {
+    led_state |= LIBINPUT_LED_NUM_LOCK;
+  }
+  if (caps_lock_state != 0) {
+    led_state |= LIBINPUT_LED_CAPS_LOCK;
+  }
+  if (led_state != last_led_state) {
+    struct li_device_info *trav_li_device_info = NULL;
+    last_led_state = led_state;
+    LIST_FOREACH(trav_li_device_info, &ldi_head, ldi_entries) {
+      libinput_device_led_update(trav_li_device_info->device, led_state);
+    }
+  }
+}
+
 static void handle_libinput_event(struct libinput_event *li_event,
   uint32_t ts_milliseconds) {
-  bool mouse_event_handled = false;
   enum libinput_event_type ev_type = libinput_event_get_type(li_event);
   struct libinput_device *ev_device = libinput_event_get_device(li_event);
   struct li_device_info *ev_device_info = libinput_device_get_user_data(
@@ -2048,107 +2147,19 @@ static void handle_libinput_event(struct libinput_event *li_event,
     uint32_t button_code = libinput_event_pointer_get_button(pointer_event);
     enum libinput_button_state button_state
       = libinput_event_pointer_get_button_state(pointer_event);
-
-    mouse_event_handled = true;
-
-    if (button_state == LIBINPUT_BUTTON_STATE_PRESSED) {
-      /*
-       * Both libinput and zwlr_virtual_pointer_v1 use evdev event codes to
-       * identify the button pressed, so we can just pass the data from
-       * libinput straight through.
-       */
-      zwlr_virtual_pointer_v1_button(
-        state.virt_pointer, ts_milliseconds, button_code,
-        WL_POINTER_BUTTON_STATE_PRESSED);
-    } else {
-      zwlr_virtual_pointer_v1_button(
-        state.virt_pointer, ts_milliseconds, button_code,
-        WL_POINTER_BUTTON_STATE_RELEASED);
-    }
+    handle_pointer_button_event(ts_milliseconds, button_code, button_state);
 
   } else if (ev_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
     if (state.virt_kb_keymap_set) {
       struct libinput_event_keyboard *kb_event
         = libinput_event_get_keyboard_event(li_event);
-      uint32_t key = libinput_event_keyboard_get_key(kb_event);
+      uint32_t key_code = libinput_event_keyboard_get_key(kb_event);
       enum libinput_key_state key_state
         = libinput_event_keyboard_get_key_state(kb_event);
-      enum libinput_led led_state = 0;
-      xkb_mod_mask_t depressed_mods;
-      xkb_mod_mask_t latched_mods;
-      xkb_mod_mask_t locked_mods;
-      xkb_layout_index_t effective_group;
-
-      if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
-        /*
-         * XKB keycodes == evdev keycodes + 8. Why this design decision was
-         * made, I have no idea.
-         */
-        xkb_state_update_key(state.xkb_state, key + 8, XKB_KEY_DOWN);
-      } else {
-        xkb_state_update_key(state.xkb_state, key + 8, XKB_KEY_UP);
-      }
-      depressed_mods = xkb_state_serialize_mods(
-        state.xkb_state, XKB_STATE_MODS_DEPRESSED);
-      latched_mods = xkb_state_serialize_mods(
-        state.xkb_state, XKB_STATE_MODS_LATCHED);
-      locked_mods = xkb_state_serialize_mods(
-        state.xkb_state, XKB_STATE_MODS_LOCKED);
-      effective_group = xkb_state_serialize_layout(
-        state.xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
-      zwp_virtual_keyboard_v1_modifiers(state.virt_kb, depressed_mods,
-        latched_mods, locked_mods, effective_group);
-      zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key,
-        key_state);
-
-      /*
-       * Generally, X11 and Wayland turn an LED on after a key press, and
-       * off after a key release. The exact reason for this is unclear, but
-       * we mimic that behavior here to make sure we don't trip any weird
-       * edge cases that depend on this.
-       */
-      if (key == KEY_NUMLOCK) {
-        if (key_state == LIBINPUT_KEY_STATE_PRESSED
-          && !ev_device_info->num_lock_held) {
-          ev_device_info->num_lock_held = true;
-          ev_device_info->num_lock_state += 1;
-        } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
-          ev_device_info->num_lock_held = false;
-          ev_device_info->num_lock_state += 1;
-        }
-        if (ev_device_info->num_lock_state == 4) {
-          ev_device_info->num_lock_state = 0;
-        }
-      } else if (key == KEY_CAPSLOCK) {
-        if (key_state == LIBINPUT_KEY_STATE_PRESSED
-          && !ev_device_info->caps_lock_held) {
-          ev_device_info->caps_lock_held = true;
-          ev_device_info->caps_lock_state += 1;
-        } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
-          ev_device_info->caps_lock_held = false;
-          ev_device_info->caps_lock_state += 1;
-        }
-        if (ev_device_info->caps_lock_state == 4) {
-          ev_device_info->caps_lock_state = 0;
-        }
-      }
-      if (ev_device_info->num_lock_state != 0) {
-        led_state |= LIBINPUT_LED_NUM_LOCK;
-      }
-      if (ev_device_info->caps_lock_state != 0) {
-        led_state |= LIBINPUT_LED_CAPS_LOCK;
-      }
-      if (led_state != ev_device_info->last_led_state) {
-        ev_device_info->last_led_state = led_state;
-        libinput_device_led_update(ev_device, led_state);
-      }
+      handle_key_event(ts_milliseconds, key_code, key_state);
     }
   } else {
     assert(false);
-  }
-
-  if (mouse_event_handled) {
-    zwlr_virtual_pointer_v1_frame(state.virt_pointer);
   }
 
   li_device_info_unref(ev_device_info);
