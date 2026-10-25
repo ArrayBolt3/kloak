@@ -2432,6 +2432,15 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   } else if ((li_event_type == LIBINPUT_EVENT_DEVICE_ADDED)
     || (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON)
     || (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY)) {
+    /* Debugging. */
+    /*if (li_event_type == LIBINPUT_EVENT_KEYBOARD_KEY) {
+      struct libinput_event_keyboard *kb_event
+        = libinput_event_get_keyboard_event(li_event);
+      enum libinput_key_state key_state
+        = libinput_event_keyboard_get_key_state(kb_event);
+      uint32_t key_code = libinput_event_keyboard_get_key(kb_event);
+      printf("KEYBOARD_KEY state %u code %u\n", key_state, key_code);
+    }*/
 
     if (li_event_type == LIBINPUT_EVENT_POINTER_BUTTON) {
       /*
