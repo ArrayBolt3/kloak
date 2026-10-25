@@ -604,6 +604,11 @@ static void print_usage(void);
 static void applayer_random_init(void);
 
 /*
+ * Compiles regexes.
+ */
+static void applayer_regex_init(void);
+
+/*
  * Connects to the wayland compositor and begins initialization of the Wayland
  * state.
  */

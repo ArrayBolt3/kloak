@@ -45,6 +45,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <ctype.h>
+#include <regex.h>
 #include <linux/input.h>
 #include <sys/inotify.h>
 
@@ -86,6 +87,7 @@ static double horiz_scroll_accum = 0.0;
 static struct disp_state state = { 0 };
 static struct libinput *li = NULL;
 static int inotify_fd = 0;
+static regex_t evdev_reg = { 0 };
 
 static struct pollfd *ev_fds = NULL;
 
@@ -2575,7 +2577,7 @@ static void handle_inotify_events(void) {
     rem_len -= struct_len;
     assert(rem_len >= 0);
 
-    if (ie->len > 0 && strncmp(ie->name, "event", strlen("event")) == 0) {
+    if (ie->len > 0 && regexec(&evdev_reg, ie->name, 0, NULL, 0) == 0) {
       if (ie->mask & IN_CREATE) {
         attach_input_device(ie->name);
       } else {
@@ -2700,6 +2702,11 @@ static void print_usage(void) {
 
 static void applayer_random_init(void) {
   randfd = safe_open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+}
+
+static void applayer_regex_init(void) {
+  int comp_rslt = regcomp(&evdev_reg, "^event[0-9]\\+$", REG_NOSUB);
+  assert(comp_rslt == 0);
 }
 
 static void applayer_wayland_init(void) {
@@ -2836,7 +2843,7 @@ static void applayer_libinput_init(void) {
       continue;
     }
 
-    if (strncmp(input_dir_entry->d_name, "event", strlen("event")) != 0) {
+    if (regexec(&evdev_reg, input_dir_entry->d_name, 0, NULL, 0) != 0) {
       continue;
     }
 
@@ -3035,6 +3042,7 @@ int main(int argc, char **argv) {
   }
 
   applayer_random_init();
+  applayer_regex_init();
   applayer_wayland_init();
   applayer_inotify_init();
   applayer_libinput_init();
