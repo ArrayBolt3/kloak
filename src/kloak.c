@@ -102,7 +102,7 @@ static bool enable_natural_scrolling = false;
 
 static uint32_t **esc_key_list = NULL;
 static size_t *esc_key_sublist_len = NULL;
-static bool *active_esc_key_list = NULL;
+static int32_t *active_esc_key_list = NULL;
 static size_t esc_key_list_len = 0;
 
 static LIST_HEAD(listhead_ldi, li_device_info) ldi_head;
@@ -2202,9 +2202,10 @@ static void register_esc_combo_event(struct libinput_event *li_event) {
       }
 
       if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
-        active_esc_key_list[i] = true;
+        active_esc_key_list[i]++;
       } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
-        active_esc_key_list[i] = false;
+        active_esc_key_list[i]--;
+	assert(active_esc_key_list[i] >= 0);
       } else {
         assert(false);
       }
@@ -2625,10 +2626,10 @@ static void parse_esc_key_str(const char *esc_key_str) {
     esc_key_sublist_len = safe_reallocarray(esc_key_sublist_len,
       esc_key_list_len, sizeof(size_t));
     active_esc_key_list = safe_reallocarray(active_esc_key_list,
-      esc_key_list_len, sizeof(bool));
+      esc_key_list_len, sizeof(int32_t));
     esc_key_list[i] = NULL;
     esc_key_sublist_len[i] = 0;
-    active_esc_key_list[i] = false;
+    active_esc_key_list[i] = 0;
 
     for (j = 0; ((sub_token = strsep(&root_token, "|")) != NULL); j++)  {
       if (sub_token[0] == '\0') {
