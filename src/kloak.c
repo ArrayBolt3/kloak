@@ -1111,6 +1111,13 @@ static void wl_display_flush_safe(struct wl_display *display) {
   }
 }
 
+static void wl_display_dispatch_pending_safe(struct wl_display *display) {
+  if (wl_display_dispatch_pending(display) == -1) {
+    fprintf(stderr, "FATAL ERROR: Could not dispatch Wayland events!\n");
+    exit(1);
+  }
+}
+
 static void wl_init_new_display(struct disp_state *param_state,
   ssize_t disp_idx) {
   param_state->layers[disp_idx] = allocate_drawable_layer(param_state,
@@ -3055,7 +3062,7 @@ int main(int argc, char **argv) {
   if (did_wayland_init) {
     while (true) {
       while (wl_display_prepare_read(state.display) != 0) {
-        wl_display_dispatch_pending(state.display);
+        wl_display_dispatch_pending_safe(state.display);
       }
       wl_display_flush_safe(state.display);
 
@@ -3107,7 +3114,7 @@ int main(int argc, char **argv) {
             strerror(errno));
           exit(1);
         }
-        wl_display_dispatch_pending(state.display);
+        wl_display_dispatch_pending_safe(state.display);
       } else {
         wl_display_cancel_read(state.display);
       }

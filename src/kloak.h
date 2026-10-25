@@ -409,6 +409,11 @@ static int32_t get_ticks_from_scroll_accum(double *accum_ptr);
 static void wl_display_flush_safe(struct wl_display *display);
 
 /*
+ * Attempts to dispatch pending Wayland events, aborts the program on failure.
+ */
+static void wl_display_dispatch_pending_safe(struct wl_display *display);
+
+/*
  * Sets up structures, objects, and listeners for a newly attached display.
  */
 static void wl_init_new_display(struct disp_state *param_state,
