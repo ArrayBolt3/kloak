@@ -683,10 +683,12 @@ static void recalc_global_space(struct disp_state *param_state) {
     exit(1);
   }
 
-  param_state->global_space_width = br_corner_x;
-  param_state->global_space_height = br_corner_y;
+  param_state->global_space_width = br_corner_x - ul_corner_x;
+  param_state->global_space_height = br_corner_y - ul_corner_y;
   param_state->pointer_space_x = ul_corner_x;
   param_state->pointer_space_y = ul_corner_y;
+  param_state->pointer_space_right_edge = br_corner_x;
+  param_state->pointer_space_bottom_edge = br_corner_y;
 }
 
 static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
@@ -2252,8 +2254,8 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
       pointer_event, (uint32_t)(state.global_space_height));
     prev_cursor_x = cursor_x;
     prev_cursor_y = cursor_y;
-    cursor_x = abs_x;
-    cursor_y = abs_y;
+    cursor_x = abs_x + state.pointer_space_x;
+    cursor_y = abs_y + state.pointer_space_y;
     ev_packet = update_virtual_cursor();
     libinput_event_destroy(li_event);
     if (!ev_packet) {
@@ -2270,10 +2272,10 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     cursor_y += rel_y;
     if (cursor_x < state.pointer_space_x) cursor_x = state.pointer_space_x;
     if (cursor_y < state.pointer_space_y) cursor_y = state.pointer_space_y;
-    if (cursor_x > state.global_space_width - 1)
-      cursor_x = state.global_space_width - 1;
-    if (cursor_y > state.global_space_height - 1)
-      cursor_y = state.global_space_height - 1;
+    if (cursor_x > state.pointer_space_right_edge - 1)
+      cursor_x = state.pointer_space_right_edge  - 1;
+    if (cursor_y > state.pointer_space_bottom_edge - 1)
+      cursor_y = state.pointer_space_bottom_edge - 1;
     ev_packet = update_virtual_cursor();
     libinput_event_destroy(li_event);
     if (!ev_packet) {
@@ -2487,18 +2489,19 @@ static void release_scheduled_input_events(void) {
       exit(0);
     }
     if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE) {
+      int32_t pointer_x = ev_packet->data.mousemove.cursor_x
+        - state.pointer_space_x;
+      int32_t pointer_y = ev_packet->data.mousemove.cursor_y
+        - state.pointer_space_y;
       assert(state.pointer_space_x >= 0);
       assert(state.pointer_space_y >= 0);
-      assert(ev_packet->data.mousemove.cursor_x >= state.pointer_space_x);
-      assert(ev_packet->data.mousemove.cursor_y >= state.pointer_space_y);
-      assert(state.global_space_width >= state.pointer_space_x);
-      assert(state.global_space_height >= state.pointer_space_y);
+      if (pointer_x < 0) pointer_x = 0;
+      if (pointer_y < 0) pointer_y = 0;
       zwlr_virtual_pointer_v1_motion_absolute(
         state.virt_pointer, (uint32_t)(ev_packet->sched_time),
-        (uint32_t)(ev_packet->data.mousemove.cursor_x - state.pointer_space_x),
-        (uint32_t)(ev_packet->data.mousemove.cursor_y - state.pointer_space_y),
-        (uint32_t)(state.global_space_width - state.pointer_space_x),
-        (uint32_t)(state.global_space_height - state.pointer_space_y));
+        (uint32_t)(pointer_x), (uint32_t)(pointer_y),
+        (uint32_t)(state.global_space_width),
+        (uint32_t)(state.global_space_height));
       zwlr_virtual_pointer_v1_frame(state.virt_pointer);
 
     } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {

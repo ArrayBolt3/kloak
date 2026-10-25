@@ -201,6 +201,8 @@ struct disp_state {
   int32_t global_space_height;
   int32_t pointer_space_x;
   int32_t pointer_space_y;
+  int32_t pointer_space_right_edge;
+  int32_t pointer_space_bottom_edge;
   struct zwlr_layer_shell_v1 *layer_shell;
   struct zwlr_virtual_pointer_manager_v1 *virt_pointer_manager;
   struct zwp_virtual_keyboard_manager_v1 *virt_kb_manager;
