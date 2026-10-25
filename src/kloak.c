@@ -1569,9 +1569,9 @@ static void xdg_output_handle_description(__attribute__((unused)) void *data,
 static void layer_surface_configure(void *data,
   struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial, uint32_t width,
   uint32_t height) {
-
   struct disp_state *param_state = data;
   struct drawable_layer *layer = NULL;
+  struct output_geometry *geometry = NULL;
   ssize_t i = 0;
   int shm_fd = 0;
   struct wl_region *zeroed_region = NULL;
@@ -1600,13 +1600,34 @@ static void layer_surface_configure(void *data,
           wl_shm_pool_destroy(layer->shm_pool);
           layer->shm_pool = NULL;
         }
+        /* 
+         * Use the pending output geometry here, as it likely contains an
+         * up-to-date size for the display in the event we aren't given a size
+         * hint by the compositor. Of course, the compositor *could* send us
+         * a layer surface configure event without a size hint and without
+         * telling us the size of the screen yet, but that would be a
+         * compositor bug, and in such a scenario the virtual cursor just won't
+         * be drawn when the mouse moves into an area we didn't allocate layer
+         * space for.
+         */
+        geometry = param_state->pending_output_geometries[i];
         break;
       }
     }
   }
   assert(layer != NULL);
+  if (width == 0) {
+    assert(geometry->width > 0);
+    width = (uint32_t)(geometry->width);
+  }
+  if (height == 0) {
+    assert(geometry->height > 0);
+    height = (uint32_t)(geometry->height);
+  }
   assert(width <= INT32_MAX / 4);
   assert(height <= INT32_MAX);
+  assert(width > 0);
+  assert(height > 0);
   layer->width = (int32_t)(width);
   layer->height = (int32_t)(height);
   layer->stride = (int32_t)(width * 4);
