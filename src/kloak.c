@@ -2978,21 +2978,21 @@ static void parse_cli_args(int argc, char **argv) {
     if (getopt_rslt == 'd') {
       if (!parse_uint31_arg(optarg, 10, &max_delay)) {
         fprintf(stderr,
-          "FATAL ERROR: Invalid value '%s' passed to parameter 'delay'!",
+          "FATAL ERROR: Invalid value '%s' passed to parameter 'delay'!\n",
           optarg);
         exit(1);
       }
     } else if (getopt_rslt == 's') {
       if (!parse_uint31_arg(optarg, 10, &startup_delay)) {
         fprintf(stderr,
-          "FATAL ERROR: Invalid value '%s' passed to parameter 'start-delay'!",
+          "FATAL ERROR: Invalid value '%s' passed to parameter 'start-delay'!\n",
           optarg);
         exit(1);
       }
     } else if (getopt_rslt == 'c') {
       if (!parse_uint32_arg(optarg, 16, &cursor_color)) {
         fprintf(stderr,
-          "FATAL ERROR: Invalid value '%s' passed to parameter 'color'!",
+          "FATAL ERROR: Invalid value '%s' passed to parameter 'color'!\n",
           optarg);
         exit(1);
       }
