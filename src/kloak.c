@@ -671,15 +671,12 @@ static void recalc_global_space(struct disp_state *param_state) {
   if (conn_screen_list_len != screen_list_len) {
     fprintf(stderr,
       "FATAL ERROR: Multiple screens are attached and gaps are present between them. kloak cannot operate in this configuration.\n");
-    /*
-     * Debugging.
-     *
-     * fprintf(stderr, "Map of display geometries:\n");
-     * for (ssize_t z = 0; z < screen_list_len; z++) {
-     *   fprintf(stderr, "Screen %ld: x = %d, y = %d, width = %d, height = %d\n",
-     *     z, screen_list[z]->x, screen_list[z]->y, screen_list[z]->width, screen_list[z]->height);
-     * }
-     */
+    /* Debugging. */
+    /*printf("Map of display geometries:\n");
+    for (ssize_t z = 0; z < screen_list_len; z++) {
+      printf("Screen %ld: x = %d, y = %d, width = %d, height = %d\n",
+        z, screen_list[z]->x, screen_list[z]->y, screen_list[z]->width, screen_list[z]->height);
+    }*/
     exit(1);
   }
 
@@ -882,10 +879,10 @@ static bool parse_uint31_arg(const char *val, int base, int32_t *out) {
   if (val == NULL || out == NULL) {
     return false;
   }
-  if (*val == '\0') {
-    return false;
-  }
-  if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
+  if (*val == '\0'
+    || *val == '-'
+    || *val == '+'
+    || isspace((unsigned char)(*val))) {
     return false;
   }
   errno = 0;
@@ -910,10 +907,10 @@ static bool parse_uint32_arg(const char *val, int base, uint32_t *out) {
   if (val == NULL || out == NULL) {
     return false;
   }
-  if (*val == '\0') {
-    return false;
-  }
-  if (*val == '-' || *val == '+' || isspace((unsigned char)(*val))) {
+  if (*val == '\0'
+    || *val == '-'
+    || *val == '+'
+    || isspace((unsigned char)(*val))) {
     return false;
   }
   errno = 0;
@@ -951,8 +948,7 @@ static int32_t sleep_ms(int64_t ms) {
 
 /*
  * GCC issues a false-positive warning if the rslt_len check catches a -1
- * return from vsnprintf. Why is not known, but the code is known to be
- * good.
+ * return from vsnprintf.
  */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
@@ -970,7 +966,7 @@ static char *sgenprintf(const char *str, ...) {
       "FATAL ERROR: String processing issue: %s\n", strerror(errno));
     exit(1);
   }
-  rslt_len++; // for the terminating null byte
+  rslt_len++; /* for the terminating null byte */
   rslt = safe_calloc(1, (size_t)(rslt_len));
   va_start(extra_args, str);
   rslt_writelen = vsnprintf(rslt, (size_t)(rslt_len), str, extra_args);
@@ -1114,6 +1110,13 @@ static void wl_display_flush_safe(struct wl_display *display) {
 static void wl_display_dispatch_pending_safe(struct wl_display *display) {
   if (wl_display_dispatch_pending(display) == -1) {
     fprintf(stderr, "FATAL ERROR: Could not dispatch Wayland events!\n");
+    exit(1);
+  }
+}
+
+static void wl_display_roundtrip_safe(struct wl_display *display) {
+  if (wl_display_roundtrip(display) == -1) {
+    fprintf(stderr, "FATAL ERROR: Could not roundtrip Wayland display!\n");
     exit(1);
   }
 }
@@ -1484,9 +1487,8 @@ static void wl_output_handle_mode(__attribute__((unused)) void *data,
 
 static void wl_output_info_done(void *data, struct wl_output *output) {
   struct disp_state *param_state = data;
-  ssize_t i = 0;
 
-  for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+  for (ssize_t i = 0; i < MAX_SCREEN_COUNT; i++) {
     if (param_state->outputs[i] == output) {
       param_state->xdg_output_reconfig_flags[i] = false;
       break;
@@ -1600,7 +1602,7 @@ static void layer_surface_configure(void *data,
           wl_shm_pool_destroy(layer->shm_pool);
           layer->shm_pool = NULL;
         }
-        /* 
+        /*
          * Use the pending output geometry here, as it likely contains an
          * up-to-date size for the display in the event we aren't given a size
          * hint by the compositor. Of course, the compositor *could* send us
@@ -1882,12 +1884,10 @@ static struct input_packet * update_virtual_cursor(void) {
         assert(prev_cursor_y < INT32_MAX && prev_cursor_y > INT32_MIN);
         prev_scr_coord = abs_coord_to_screen_local_coord(
           (int32_t)(prev_cursor_x), (int32_t)(prev_cursor_y));
-        if (!prev_scr_coord.valid
-          || !state.layers[prev_scr_coord.output_idx]) {
-          /* This screen couldn't restore sanity, try the next one. */
-          continue;
+        if (prev_scr_coord.valid && state.layers[prev_scr_coord.output_idx]) {
+          break;
         }
-        break;
+        /* This screen couldn't restore sanity, try the next one. */
       }
     }
     if (!prev_scr_coord.valid || !state.layers[prev_scr_coord.output_idx]) {
@@ -2089,11 +2089,11 @@ static void handle_pointer_button_event(uint32_t ts_milliseconds,
 
 static void handle_key_event(uint32_t ts_milliseconds,
   uint32_t key_code, enum libinput_key_state key_state) {
+  enum libinput_led led_state = 0;
   xkb_mod_mask_t depressed_mods;
   xkb_mod_mask_t latched_mods;
   xkb_mod_mask_t locked_mods;
   xkb_layout_index_t effective_group;
-  enum libinput_led led_state = 0;
 
   if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
     /*
@@ -2235,7 +2235,7 @@ static void register_esc_combo_event(struct libinput_event *li_event) {
         active_esc_key_list[i]++;
       } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
         active_esc_key_list[i]--;
-	assert(active_esc_key_list[i] >= 0);
+        assert(active_esc_key_list[i] >= 0);
       } else {
         assert(false);
       }
@@ -2788,9 +2788,8 @@ static void applayer_wayland_init(void) {
   }
   wl_registry_add_listener(state.registry, &registry_listener, &state);
 
-  for (ssize_t init_attempts = 0; init_attempts < MAX_INIT_ATTEMPTS;
-    init_attempts++) {
-    wl_display_roundtrip(state.display);
+  for (i = 0; i < MAX_INIT_ATTEMPTS; i++) {
+    wl_display_roundtrip_safe(state.display);
     /* Check if we have all the objects we need for normal operation yet. */
     missing_obj_name = NULL;
     if (state.shm == NULL) {
@@ -2862,7 +2861,7 @@ static void applayer_wayland_init(void) {
    * of the wl_seat listener.
    */
   wl_seat_add_listener(state.seat, &seat_listener, &state);
-  wl_display_roundtrip(state.display);
+  wl_display_roundtrip_safe(state.display);
   if (state.kb == NULL) {
     fprintf(stderr, "FATAL ERROR: No wl_keyboard object from compositor!\n");
     exit(1);
@@ -2935,9 +2934,7 @@ static void applayer_poll_init(void) {
 
 static void check_dup_arg_and_mark(int opt, int *seen_opts,
   ssize_t *seen_opts_pos_ptr) {
-  ssize_t i = 0;
-
-  for (i = 0; i < *seen_opts_pos_ptr; i++) {
+  for (ssize_t i = 0; i < *seen_opts_pos_ptr; i++) {
     if (seen_opts[i] == opt) {
       fprintf(stderr,
         "FATAL ERROR: Option '-%c' was specified multiple times!\n", opt);

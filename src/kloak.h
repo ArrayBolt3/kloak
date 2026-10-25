@@ -25,7 +25,6 @@
 /*******************/
 #define MAX_SCREEN_COUNT 128
 #define CURSOR_RADIUS 15
-#define POLL_TIMEOUT_MS 1
 #define DEFAULT_MAX_DELAY_MS 100
 #define DEFAULT_STARTUP_TIMEOUT_MS 500
 #define MAX_UNRELEASED_FRAMES 3
@@ -414,6 +413,11 @@ static void wl_display_flush_safe(struct wl_display *display);
 static void wl_display_dispatch_pending_safe(struct wl_display *display);
 
 /*
+ * Same as above, but for wl_display_roundtrip.
+ */
+static void wl_display_roundtrip_safe(struct wl_display *display);
+
+/*
  * Sets up structures, objects, and listeners for a newly attached display.
  */
 static void wl_init_new_display(struct disp_state *param_state,
@@ -541,17 +545,16 @@ static struct input_packet *update_virtual_cursor(void);
 static struct input_packet *update_mouse_scroll(void);
 
 /*
- * Processes a button press/release from either a libinput or fake libinput
- * event.
+ * Processes a button press/release from a libinput event.
  */
 static void handle_pointer_button_event(uint32_t ts_milliseconds,
   uint32_t button_code, enum libinput_button_state button_state);
 
 /*
- * Processes a key press/release from either a libinput or fake libinput event.
+ * Processes a key press/release from a libinput event.
  */
 static void handle_key_event(uint32_t ts_milliseconds,
-  uint32_t key_code, enum libinput_key_state button_state);
+  uint32_t key_code, enum libinput_key_state key_state);
 
 /*
  * Processes a libinput event, sending emulated input to the compositor as
