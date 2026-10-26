@@ -32,14 +32,6 @@
 #define INOTIFY_READ_BUF_LEN 16384
 #define MAX_INIT_ATTEMPTS 8
 
-#ifndef min
-#define min(a, b) ( ((a) < (b)) ? (a) : (b) )
-#endif
-
-#ifndef max
-#define max(a, b) ( ((a) > (b)) ? (a) : (b) )
-#endif
-
 /*******************/
 /* core structures */
 /*******************/
@@ -271,6 +263,16 @@ static DIR *safe_opendir(const char *name);
 static void safe_closedir(DIR *dirp);
 
 /*
+ * Converts a timespec to a millisecond count.
+ */
+int64_t timespec_to_ms(struct timespec spec);
+
+/*
+ * Converts a millisecond count to a timespec.
+ */
+struct timespec ms_to_timespec(int64_t ms);
+
+/*
  * Increments the reference count of an li_device_info struct.
  */
 static void li_device_info_ref(struct li_device_info *ldi);
@@ -316,12 +318,11 @@ static bool check_screen_touch(struct output_geometry scr1,
   struct output_geometry scr2);
 
 /*
- * Calculates the size of the global compositor space and the location of the
- * upper-left corner of the pointer's coordinate space from the geometries of
- * the active displays. The function detects if there are gaps between the
- * displays and aborts the program if so.
+ * Checks screen continuity and calculates the size of the global compositor
+ * space and the location of the upper-left corner of the pointer's coordinate
+ * space. Returns true on success, false if there are gaps between displays.
  */
-static void recalc_global_space(struct disp_state *param_state);
+static bool recalc_global_space(struct disp_state *param_state);
 
 /*
  * Converts a set of coordinates in global compositor space to a set of
@@ -338,10 +339,10 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
   int32_t output_idx);
 
 /*
- * Takes two points that define a line on a 2d plane, and walks the specified
- * number of pixels from the start point towards the "end" point. Note that
- * you *can* walk past the end point, and that the end point is NOT guaranteed
- * to be one of the values this function outputs.
+ * Takes two points that define a line on a 2d plane, and outputs the
+ * coordinate corresponding to the pixel that is 'pos' pixels away from the
+ * origin point. It is not possible to walk beyond the end coordinates, and the
+ * end coordiante will always be included in the output.
  */
 static struct coord traverse_line(struct coord start, struct coord end,
   int32_t pos);
@@ -527,6 +528,13 @@ static struct drawable_layer *allocate_drawable_layer(
  */
 static void damage_surface_enh(struct wl_surface *surface, int32_t x,
   int32_t y, int32_t width, int32_t height);
+
+/*
+ * Adjust cursor_x and cursor_y so that moving the cursor to it does not land
+ * in or jump over a void in compositor space, while leaving it as close as
+ * possible to the original target location.
+ */
+static void make_virtual_cursor_pos_sane(void);
 
 /*
  * Updates the virtual cursor's position based on the global cursor_x and

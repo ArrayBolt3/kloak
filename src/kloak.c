@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+ * Copyright (c) 2025 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
  * See the file COPYING for copying conditions.
  */
 
@@ -44,6 +44,7 @@
 #include <linux/vt.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/param.h>
 #include <ctype.h>
 #include <regex.h>
 #include <linux/input.h>
@@ -357,6 +358,25 @@ static void safe_closedir(DIR *dirp) {
   }
 }
 
+int64_t timespec_to_ms(struct timespec spec) {
+  int64_t result = 0;
+  assert(spec.tv_sec < INT64_MAX);
+  assert(spec.tv_sec >= 0);
+  assert(spec.tv_nsec < 1000000000);
+  assert(spec.tv_nsec >= 0);
+  result = ((int64_t)spec.tv_sec * 1000) + (spec.tv_nsec / 1000000);
+  assert(result >= 0);
+  return result;
+}
+
+struct timespec ms_to_timespec(int64_t ms) {
+  struct timespec ts = { 0 };
+  assert(ms >= 0);
+  ts.tv_sec = (time_t)(ms / 1000);
+  ts.tv_nsec = (ms % 1000) * 1000000;
+  return ts;
+}
+
 static void li_device_info_ref(struct li_device_info *ldi) {
   ldi->refcount += 1;
   assert(ldi->refcount != 0);
@@ -487,9 +507,7 @@ static int64_t current_time_ms(void) {
   int64_t result = 0;
 
   clock_gettime(CLOCK_MONOTONIC, &spec);
-  assert(spec.tv_sec < INT64_MAX);
-  result = ((int64_t)spec.tv_sec * 1000) + (spec.tv_nsec / 1000000);
-  assert(result >= 0);
+  result = timespec_to_ms(spec);
   if (start_time == 0) {
     start_time = result;
     return 0;
@@ -564,7 +582,7 @@ static bool check_screen_touch(struct output_geometry scr1,
   return false;
 }
 
-static void recalc_global_space(struct disp_state *param_state) {
+static bool recalc_global_space(struct disp_state *param_state) {
   int32_t ul_corner_x = INT32_MAX;
   int32_t ul_corner_y = INT32_MAX;
   int32_t br_corner_x = 0;
@@ -623,15 +641,15 @@ static void recalc_global_space(struct disp_state *param_state) {
     }
   }
 
-  /* Silently fail if we haven't gotten a valid state yet */
+  /* If we haven't gotten a valid state yet, report success and do nothing. */
   if (screen_list_len <= 0) {
-    return;
+    return true;
   }
   if (ul_corner_x > br_corner_x) {
-    return;
+    return true;
   }
   if (ul_corner_y > br_corner_y) {
-    return;
+    return true;
   }
 
   conn_screen_list[0] = screen_list[0];
@@ -669,15 +687,13 @@ static void recalc_global_space(struct disp_state *param_state) {
   }
 
   if (conn_screen_list_len != screen_list_len) {
-    fprintf(stderr,
-      "FATAL ERROR: Multiple screens are attached and gaps are present between them. kloak cannot operate in this configuration.\n");
     /* Debugging. */
     /*printf("Map of display geometries:\n");
     for (ssize_t z = 0; z < screen_list_len; z++) {
       printf("Screen %ld: x = %d, y = %d, width = %d, height = %d\n",
         z, screen_list[z]->x, screen_list[z]->y, screen_list[z]->width, screen_list[z]->height);
     }*/
-    exit(1);
+    return false;
   }
 
   param_state->global_space_width = br_corner_x - ul_corner_x;
@@ -686,6 +702,7 @@ static void recalc_global_space(struct disp_state *param_state) {
   param_state->pointer_space_y = ul_corner_y;
   param_state->pointer_space_right_edge = br_corner_x;
   param_state->pointer_space_bottom_edge = br_corner_y;
+  return true;
 }
 
 static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
@@ -782,56 +799,75 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
 
 struct coord traverse_line(struct coord start, struct coord end,
   int32_t pos) {
-  struct coord out_val = { 0 };
-  double num = 0.0;
-  double denom = 0.0;
-  double slope = 0.0;
-  double steep = 0.0;
+  /*
+   * Based on Zingl Alois' implementation of Bresenham's algorithm for line
+   * drawing (https://zingl.github.io/bresenham.c function plotLine()),
+   * modified to return a specific point from a line rather than drawing the
+   * whole line to a canvas.
+   */
+  static struct coord fail_coord = { .x = -1, .y = -1 };
+  static struct coord last_start = { 0 };
+  static struct coord last_end = { 0 };
+  static struct coord work_coord = { 0 };
+  static struct coord err_adj = { 0 };
+  static struct coord direct_adj = { 0 };
+  static int32_t err_val = 0;
+  static int32_t err_2x_val = 0;
+  static int32_t last_pos = 0;
+  static int32_t max_pos = 0;
+  int32_t i = 0;
 
-  num = ((double) end.y) - ((double) start.y);
-  denom = ((double) start.x) - ((double) end.x);
+  assert(start.x >= 0);
+  assert(start.y >= 0);
+  assert(end.x >= 0);
+  assert(end.y >= 0);
+  assert(pos >= 0);
 
-  if (pos == 0) return start;
-
-  if ((int64_t)(denom) == 0) {
-    /* vertical line */
-    out_val.x = start.x;
-    if (start.y < end.y) {
-      out_val.y = start.y + pos;
-    } else {
-      out_val.y = start.y - pos;
-    }
-    return out_val;
+  /*
+   * We could include code to traverse the line backwards when needed, but
+   * kloak doesn't ever need to do that so there's no point.
+   */
+  if (last_start.x != start.x || last_start.y != start.y
+    || last_end.x != end.x || last_end.y != end.y || pos < last_pos) {
+    work_coord = start;
+    err_adj.x = abs(end.x - start.x);
+    err_adj.y = -abs(end.y - start.y);
+    direct_adj.x = start.x < end.x ? 1 : -1;
+    direct_adj.y = start.y < end.y ? 1 : -1;
+    err_val = err_adj.x + err_adj.y;
+    err_2x_val = 0;
+    last_start = start;
+    last_end = end;
+    last_pos = 0;
+    max_pos = MAX(abs(end.x - start.x), abs(end.y - start.y));
   }
 
-  slope = num / denom;
-  steep = fabs(slope);
-
-  if (steep < 1) {
-    if (start.x < end.x) {
-      out_val.x = start.x + pos;
-    } else {
-      out_val.x = start.x - pos;
-    }
-    if (start.y < end.y) {
-      out_val.y = start.y + (int32_t)((double) pos * steep);
-    } else {
-      out_val.y = start.y - (int32_t)((double) pos * steep);
-    }
-  } else {
-    if (start.y < end.y) {
-      out_val.y = start.y + pos;
-    } else {
-      out_val.y = start.y - pos;
-    }
-    if (start.x < end.x) {
-      out_val.x = start.x + (int32_t)((double) pos * (1 / steep));
-    } else {
-      out_val.x = start.x - (int32_t)((double) pos * (1 / steep));
-    }
+  if (pos > max_pos) {
+    return fail_coord;
+  }
+  if (pos == last_pos) {
+    return work_coord;
   }
 
-  return out_val;
+  for (i = 0; i < pos - last_pos; i++) {
+    err_2x_val = err_val * 2;
+    if (err_2x_val >= err_adj.y) {
+      if (work_coord.x == end.x) {
+        break;
+      }
+      err_val += err_adj.y;
+      work_coord.x += direct_adj.x;
+    }
+    if (err_2x_val <= err_adj.x) {
+      if (work_coord.y == end.y) {
+        break;
+      }
+      err_val += err_adj.x;
+      work_coord.y += direct_adj.y;
+    }
+  }
+  last_pos = pos;
+  return work_coord;
 }
 
 static void draw_block(uint32_t *pixbuf, int32_t offset, int32_t x, int32_t y,
@@ -932,10 +968,7 @@ static int32_t sleep_ms(int64_t ms) {
   struct timespec ts = { 0 };
   int nanosleep_ret = 0;
 
-  assert(ms >= 0);
-
-  ts.tv_sec = (time_t)(ms / 1000);
-  ts.tv_nsec = (ms % 1000) * 1000000;
+  ts = ms_to_timespec(ms);
   do {
     nanosleep_ret = nanosleep(&ts, &ts);
   } while (nanosleep_ret == -1 && errno == EINTR);
@@ -1201,7 +1234,11 @@ static void display_sync_maybe(struct disp_state *param_state) {
     }
   }
 
-  recalc_global_space(param_state);
+  if (!recalc_global_space(param_state)) {
+    fprintf(stderr,
+      "FATAL ERROR: Multiple screens are attached and gaps are present between them. kloak cannot operate in this configuration.\n");
+    exit(1);
+  }
 }
 
 /********************/
@@ -1845,16 +1882,118 @@ static void damage_surface_enh(struct wl_surface *surface, int32_t x,
   wl_surface_damage_buffer(surface, x, y, width, height);
 }
 
-static struct input_packet * update_virtual_cursor(void) {
-  struct screen_local_coord prev_scr_coord = { 0 };
-  int32_t i = 0;
+static void make_virtual_cursor_pos_sane(void) {
+  /*
+   * We can't just look at the intended final location of the cursor and move
+   * it there if that location is valid, since that would allow jumping over
+   * "voids" in the compositor global space (places where global space has a
+   * pixel but no screen covers that pixel). Instead, we use the following
+   * algorithm:
+   *
+   * - Take the previous cursor position and treat it as a "start location".
+   *   Treat the current cursor position as an "end location".
+   * - Start walking in a straight line from the start location to the end
+   *   location, one pixel at a time.
+   * - Once we hit the end location, move the real mouse cursor there.
+   * - Each time we walk forward a pixel, calculate the screen-local
+   *   coordinates of that pixel, and ensure it actually is on a screen.
+   * - If a pixel is NOT on any screen, determine which direction we can move
+   *   to get back onto a screen. Move one pixel in that direction, then
+   *   change the start location to this new position and adjust the end
+   *   location so that we can walk to it moving in a straight line without
+   *   moving any further in the dimension we just moved to get back to a
+   *   screen. I.e., if we moved horizontally to the left one pixel to get
+   *   back on a screen, move the end location so that we can walk to it in a
+   *   vertical line. This allows us to "glide" along the wall.
+   *
+   * There may be a more efficient algorithm for this. Contributions welcome.
+   */
   struct coord start = { 0 };
   struct coord end = { 0 };
   struct coord prev_trav_coord = { 0 };
-  bool end_x_hit = false;
-  bool end_y_hit = false;
   struct coord trav_coord = { 0 };
   struct screen_local_coord trav_scr_coord = { 0 };
+
+  assert(cursor_x < INT32_MAX && cursor_x >= 0);
+  assert(cursor_y < INT32_MAX && cursor_y >= 0);
+  start.x = (int32_t)(prev_cursor_x);
+  start.y = (int32_t)(prev_cursor_y);
+  end.x = (int32_t)(cursor_x);
+  end.y = (int32_t)(cursor_y);
+  prev_trav_coord = start;
+  for (int32_t i = 1; ; i++) {
+    trav_coord = traverse_line(start, end, i);
+    if (trav_coord.x == -1 && trav_coord.y == -1) {
+      break;
+    }
+    trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
+      trav_coord.y);
+    if (!trav_scr_coord.valid) {
+      /*
+       * Figure out what direction we moved when we went off screen, and move
+       * move backwards in that direction, but in only one dimension.
+       */
+      if (prev_trav_coord.x < trav_coord.x) {
+        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x - 1,
+          trav_coord.y);
+        if (trav_scr_coord.valid) {
+          start.x = trav_coord.x - 1;
+          start.y = trav_coord.y;
+          end.x = trav_coord.x - 1;
+          i = 0;
+          continue;
+        }
+      }
+      if (prev_trav_coord.x > trav_coord.x) {
+        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x + 1,
+          trav_coord.y);
+        if (trav_scr_coord.valid) {
+          start.x = trav_coord.x + 1;
+          start.y = trav_coord.y;
+          end.x = trav_coord.x + 1;
+          i = 0;
+          continue;
+        }
+      }
+      if (prev_trav_coord.y < trav_coord.y) {
+        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
+          trav_coord.y - 1);
+        if (trav_scr_coord.valid) {
+          start.y = trav_coord.y - 1;
+          start.x = trav_coord.x;
+          end.y = trav_coord.y - 1;
+          i = 0;
+          continue;
+        }
+      }
+      if (prev_trav_coord.y > trav_coord.y) {
+        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
+          trav_coord.y + 1);
+        if (trav_scr_coord.valid) {
+          start.y = trav_coord.y + 1;
+          start.x = trav_coord.x;
+          end.y = trav_coord.y + 1;
+          i = 0;
+          continue;
+        }
+      }
+      /*
+       * If all of the above fail, we've gone diagonally off a screen and into
+       * compositor global space. Move the cursor back to where it was and
+       * stop it.
+       */
+      end.x = prev_trav_coord.x;
+      end.y = prev_trav_coord.y;
+      break;
+    }
+    prev_trav_coord = trav_coord;
+  }
+  cursor_x = end.x;
+  cursor_y = end.y;
+}
+
+static struct input_packet * update_virtual_cursor(void) {
+  struct screen_local_coord prev_scr_coord = { 0 };
   struct screen_local_coord scr_coord = { 0 };
   struct input_packet *old_ev_packet = NULL;
   struct input_packet *ev_packet = NULL;
@@ -1872,7 +2011,7 @@ static struct input_packet * update_virtual_cursor(void) {
      * everything in the hopes of recovering sanity.
      */
     printf("Resetting!\n");
-    for (i = 0; i < MAX_SCREEN_COUNT; i++) {
+    for (int32_t i = 0; i < MAX_SCREEN_COUNT; i++) {
       if (state.layers[i]) {
         struct coord sane_location = screen_local_coord_to_abs_coord(0, 0, i);
 
@@ -1899,120 +2038,8 @@ static struct input_packet * update_virtual_cursor(void) {
     }
   }
 
-  /*
-   * Ensure the cursor doesn't move off-screen, and recalculate its end
-   * position if it would end up off-screen.
-   *
-   * This is a bit tricky to do since we can't just look at the intended final
-   * location of the mouse and move it there if that location is valid, since
-   * that would allow jumping over "voids" in the compositor global space
-   * (places where global space has a pixel but no screen covers that pixel).
-   * Instead, we use the following algorithm:
-   *
-   * - Take the previous cursor position and treat it as a "start location".
-   *   Treat the current cursor position as an "end location".
-   * - Start walking in a straight line from the start location to the end
-   *   location, one pixel at a time.
-   * - Once we hit the end location, move the real mouse cursor there.
-   * - Each time we walk forward a pixel, calculate the screen-local
-   *   coordinates of that pixel, and ensure it actually is on a screen.
-   * - If a pixel is NOT on any screen, determine which direction we can move
-   *   to get back onto a screen. Move one pixel in that direction, then
-   *   change the start location to this new position and adjust the end
-   *   location so that we can walk to it moving in a straight line without
-   *   moving any further in the dimension we just moved to get back to a
-   *   screen. I.e., if we moved horizontally to the left one pixel to get
-   *   back on a screen, move the end location so that we can walk to it in a
-   *   vertical line. This allows us to "glide" along the wall.
-   *
-   * There may be a more efficient algorithm for this. Contributions welcome.
-   */
+  make_virtual_cursor_pos_sane();
 
-  assert(cursor_x < INT32_MAX && cursor_x >= 0);
-  assert(cursor_y < INT32_MAX && cursor_y >= 0);
-  start.x = (int32_t)(prev_cursor_x);
-  start.y = (int32_t)(prev_cursor_y);
-  end.x = (int32_t)(cursor_x);
-  end.y = (int32_t)(cursor_y);
-  prev_trav_coord = start;
-  for (i = 0; ; i++) {
-    trav_coord = traverse_line(start, end, i);
-    if (trav_coord.x == end.x) end_x_hit = true;
-    if (trav_coord.y == end.y) end_y_hit = true;
-    trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
-      trav_coord.y);
-    if (!trav_scr_coord.valid) {
-      /*
-       * Figure out what direction we moved when we went off screen, and move
-       * move backwards in that direction, but in only one dimension.
-       */
-      if (prev_trav_coord.x < trav_coord.x) {
-        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x - 1,
-          trav_coord.y);
-        if (trav_scr_coord.valid) {
-          start.x = trav_coord.x - 1;
-          start.y = trav_coord.y;
-          end.x = trav_coord.x - 1;
-          i = -1;
-          continue;
-        }
-      }
-      if (prev_trav_coord.x > trav_coord.x) {
-        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x + 1,
-          trav_coord.y);
-        if (trav_scr_coord.valid) {
-          start.x = trav_coord.x + 1;
-          start.y = trav_coord.y;
-          end.x = trav_coord.x + 1;
-          i = -1;
-          continue;
-        }
-      }
-      if (prev_trav_coord.y < trav_coord.y) {
-        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
-          trav_coord.y - 1);
-        if (trav_scr_coord.valid) {
-          start.y = trav_coord.y - 1;
-          start.x = trav_coord.x;
-          end.y = trav_coord.y - 1;
-          i = -1;
-          continue;
-        }
-      }
-      if (prev_trav_coord.y > trav_coord.y) {
-        trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
-          trav_coord.y + 1);
-        if (trav_scr_coord.valid) {
-          start.y = trav_coord.y + 1;
-          start.x = trav_coord.x;
-          end.y = trav_coord.y + 1;
-          i = -1;
-          continue;
-        }
-      }
-      /*
-       * If all of the above fail, we've gone diagonally off a screen and into
-       * compositor global space. Move the cursor back to where it was and
-       * stop it.
-       */
-      start.x = prev_trav_coord.x;
-      start.y = prev_trav_coord.y;
-      end.x = prev_trav_coord.x;
-      end.y = prev_trav_coord.y;
-      i = -1;
-      continue;
-    }
-    if (end_x_hit && end_y_hit) {
-      if ((int32_t)(cursor_x) != end.x) {
-        cursor_x = end.x;
-      }
-      if ((int32_t)(cursor_y) != end.y) {
-        cursor_y = end.y;
-      }
-      break;
-    }
-    prev_trav_coord = trav_coord;
-  }
   assert(cursor_x < INT32_MAX && cursor_x >= 0);
   assert(cursor_y < INT32_MAX && cursor_y >= 0);
   scr_coord = abs_coord_to_screen_local_coord((int32_t)(cursor_x),
@@ -2502,7 +2529,7 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
   }
 
   current_time = current_time_ms();
-  lower_bound = min(max(prev_release_time - current_time, 0), max_delay);
+  lower_bound = MIN(MAX(prev_release_time - current_time, 0), max_delay);
   random_delay = random_between(lower_bound, max_delay);
   ev_packet->sched_time = current_time + random_delay;
   TAILQ_INSERT_TAIL(&evq_head, ev_packet, evq_entries);
@@ -2512,23 +2539,23 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
 static void release_scheduled_input_events(void) {
   int64_t current_time = current_time_ms();
   struct input_packet *ev_packet = NULL;
+  int32_t pointer_x = 0;
+  int32_t pointer_y = 0;
+  bool send_axis_source_and_frame = false;
 
   while ((ev_packet = TAILQ_FIRST(&evq_head))
     && (current_time >= ev_packet->sched_time)) {
-    /*
-     * These conditionals are intentionally ordered so that more common events
-     * are processed earlier, don't re-order them unless you have to.
-     */
     assert(ev_packet->sched_time >= 0);
     if (ev_packet->sched_time > UINT32_MAX) {
       fprintf(stderr,
         "ev_packet->sched_time overflowed maximum value. This is not an error, but kloak must be restarted. Exiting.\n");
       exit(0);
     }
-    if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE) {
-      int32_t pointer_x = ev_packet->data.mousemove.cursor_x
+    switch(ev_packet->packet_type) {
+    case KLOAK_PACKET_TYPE_MOUSEMOVE:
+      pointer_x = ev_packet->data.mousemove.cursor_x
         - state.pointer_space_x;
-      int32_t pointer_y = ev_packet->data.mousemove.cursor_y
+      pointer_y = ev_packet->data.mousemove.cursor_y
         - state.pointer_space_y;
       assert(state.pointer_space_x >= 0);
       assert(state.pointer_space_y >= 0);
@@ -2540,13 +2567,14 @@ static void release_scheduled_input_events(void) {
         (uint32_t)(state.global_space_width),
         (uint32_t)(state.global_space_height));
       zwlr_virtual_pointer_v1_frame(state.virt_pointer);
+      break;
 
-    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_LIBINPUT) {
+    case KLOAK_PACKET_TYPE_LIBINPUT:
       handle_libinput_event(ev_packet->data.libinput.li_event,
         (uint32_t)(ev_packet->sched_time));
+      break;
 
-    } else if (ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL) {
-      bool send_axis_source_and_frame = false;
+    case KLOAK_PACKET_TYPE_MOUSESCROLL:
       if (ev_packet->data.mousescroll.vert_scroll_ticks != 0) {
         zwlr_virtual_pointer_v1_axis(state.virt_pointer,
           (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
@@ -2574,8 +2602,11 @@ static void release_scheduled_input_events(void) {
           WL_POINTER_AXIS_SOURCE_WHEEL);
         zwlr_virtual_pointer_v1_frame(state.virt_pointer);
       }
-    } else {
+      break;
+
+    default:
       assert(false);
+      break;
     }
     TAILQ_REMOVE(&evq_head, ev_packet, evq_entries);
     free(ev_packet);
