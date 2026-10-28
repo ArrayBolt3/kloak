@@ -431,6 +431,13 @@ static void wl_init_new_display(struct disp_state *param_state,
  */
 static void display_sync_maybe(struct disp_state *state);
 
+/*
+ * Forces the virtual cursor back within the bounds of compositor global space
+ * if it strays beyond it. Note that this function does NOT get the cursor
+ * certainly back on a screen.
+ */
+static bool clamp_cursor(void);
+
 /********************/
 /* wayland handling */
 /********************/

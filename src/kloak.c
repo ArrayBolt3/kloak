@@ -1241,6 +1241,28 @@ static void display_sync_maybe(struct disp_state *param_state) {
   }
 }
 
+static bool clamp_cursor(void) {
+  bool did_clamp = false;
+
+  if (cursor_x < state.pointer_space_x) {
+    cursor_x = state.pointer_space_x;
+    did_clamp = true;
+  }
+  if (cursor_y < state.pointer_space_y) {
+    cursor_y = state.pointer_space_y;
+    did_clamp = true;
+  }
+  if (cursor_x > state.pointer_space_right_edge - 1) {
+    cursor_x = state.pointer_space_right_edge  - 1;
+    did_clamp = true;
+  }
+  if (cursor_y > state.pointer_space_bottom_edge - 1) {
+    cursor_y = state.pointer_space_bottom_edge - 1;
+    did_clamp = true;
+  }
+  return did_clamp;
+}
+
 /********************/
 /* wayland handling */
 /********************/
@@ -2332,6 +2354,10 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     prev_cursor_y = cursor_y;
     cursor_x = abs_x + state.pointer_space_x;
     cursor_y = abs_y + state.pointer_space_y;
+    if (clamp_cursor()) {
+      fprintf(stderr,
+        "WARNING: Clamped cursor in response to an absolute positioning event, this usually should not happen.\n");
+    }
     ev_packet = update_virtual_cursor();
     libinput_event_destroy(li_event);
     if (!ev_packet) {
@@ -2346,12 +2372,11 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     prev_cursor_y = cursor_y;
     cursor_x += rel_x;
     cursor_y += rel_y;
-    if (cursor_x < state.pointer_space_x) cursor_x = state.pointer_space_x;
-    if (cursor_y < state.pointer_space_y) cursor_y = state.pointer_space_y;
-    if (cursor_x > state.pointer_space_right_edge - 1)
-      cursor_x = state.pointer_space_right_edge  - 1;
-    if (cursor_y > state.pointer_space_bottom_edge - 1)
-      cursor_y = state.pointer_space_bottom_edge - 1;
+    /* We expect to need to clamp here. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-result"
+    clamp_cursor();
+#pragma GCC diagnostic pop
     ev_packet = update_virtual_cursor();
     libinput_event_destroy(li_event);
     if (!ev_packet) {
