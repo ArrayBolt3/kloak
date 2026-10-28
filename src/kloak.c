@@ -358,7 +358,7 @@ static void safe_closedir(DIR *dirp) {
   }
 }
 
-int64_t timespec_to_ms(struct timespec spec) {
+static int64_t timespec_to_ms(struct timespec spec) {
   int64_t result = 0;
   assert(spec.tv_sec < INT64_MAX);
   assert(spec.tv_sec >= 0);
@@ -369,7 +369,7 @@ int64_t timespec_to_ms(struct timespec spec) {
   return result;
 }
 
-struct timespec ms_to_timespec(int64_t ms) {
+static struct timespec ms_to_timespec(int64_t ms) {
   struct timespec ts = { 0 };
   assert(ms >= 0);
   ts.tv_sec = (time_t)(ms / 1000);
@@ -1655,12 +1655,20 @@ static void layer_surface_configure(void *data,
     }
   }
   assert(layer != NULL);
+  assert(geometry != NULL);
   if (width == 0) {
-    assert(geometry->width > 0);
+    if (geometry->width <= 0) {
+      /* Skip this configure event, compositor hasn't given us enough info. */
+      zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
+      return;
+    }
     width = (uint32_t)(geometry->width);
   }
   if (height == 0) {
-    assert(geometry->height > 0);
+    if (geometry->height <= 0) {
+      zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
+      return;
+    }
     height = (uint32_t)(geometry->height);
   }
   assert(width <= INT32_MAX / 4);
@@ -2262,7 +2270,11 @@ static void register_esc_combo_event(struct libinput_event *li_event) {
         active_esc_key_list[i]++;
       } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
         active_esc_key_list[i]--;
-        assert(active_esc_key_list[i] >= 0);
+        if (active_esc_key_list[i] < 0) {
+          fprintf(stderr,
+            "WARNING: Unexpected escape key release. If this didn't occur very soon after kloak startup, this is probably a kloak bug.\n");
+          active_esc_key_list[i] = 0;
+        }
       } else {
         assert(false);
       }
@@ -2575,6 +2587,7 @@ static void release_scheduled_input_events(void) {
       break;
 
     case KLOAK_PACKET_TYPE_MOUSESCROLL:
+      send_axis_source_and_frame = false;
       if (ev_packet->data.mousescroll.vert_scroll_ticks != 0) {
         zwlr_virtual_pointer_v1_axis(state.virt_pointer,
           (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,

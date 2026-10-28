@@ -265,12 +265,12 @@ static void safe_closedir(DIR *dirp);
 /*
  * Converts a timespec to a millisecond count.
  */
-int64_t timespec_to_ms(struct timespec spec);
+static int64_t timespec_to_ms(struct timespec spec);
 
 /*
  * Converts a millisecond count to a timespec.
  */
-struct timespec ms_to_timespec(int64_t ms);
+static struct timespec ms_to_timespec(int64_t ms);
 
 /*
  * Increments the reference count of an li_device_info struct.
