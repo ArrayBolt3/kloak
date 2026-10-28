@@ -91,3 +91,48 @@ be either fixed or silenced, as appropriate.
 Comprehensive tests for this package are too high-volume for human review and
 live in the AI-maintained dist-ai repo, not here
 (https://github.com/org-ai-assisted/dist-ai).
+
+### Coverage is a standing obligation
+
+- Keep the dist-ai kloak coverage exhaustive, and extend it in the same change
+  as any new function or input path:
+  - Formal verification (`kloak_cbmc.c`): CBMC-prove every pure/arithmetic
+    function UB-free (and its invariant where it has one) over kloak's operating
+    envelope. A bounded loop runs under `--unwind`; a loop bounded by
+    `MAX_SCREEN_COUNT` is covered exhaustively at `--unwind 129`.
+  - Unit tests (`kloak_harness.c`): concrete values and edges for the testable
+    logic.
+  - Fuzz (`fuzz_*.c`): the untrusted-input entry points -- CLI args, compositor
+    events and screen geometry, libinput/inotify events, the keymap fd, scroll
+    accumulation.
+- Out of CBMC scope (verify by unit/fuzz/review instead): the Wayland/libinput
+  callbacks and I/O wrappers, the unbounded cursor-glide loop
+  (`make_virtual_cursor_pos_sane` / `update_virtual_cursor`), and
+  `recalc_global_space` (its O(n^2) screen-connectivity scan over symbolic
+  geometry does not converge; unit-covered, and its per-pair
+  `check_screen_touch` component is proven).
+
+## Settled -- do not re-litigate
+
+Maintainer decisions from the Whonix/kloak#24 audit. A reviewer re-raising one
+is a false positive; drop it. Standing: record every accepted maintainer
+decision (wontfix / by-design / out-of-scope) here when it is made, so it is
+not re-litigated.
+
+- Keymap short-fd SIGBUS / TOCTOU (compositor-declared `size` larger than the
+  keymap fd): WONTFIX. No code-execution path (nothing is read or written past
+  the mapping) and a hostile compositor already sees all input, so kloak cannot
+  defend against it. Do not re-add an fstat/pread guard.
+- Absolute pointer / touchscreen maps onto the whole global space: intended.
+  Only the coordinate-offset bug was a fix; per-output touch binding is out of
+  scope.
+- Fixed Wayland protocol versions: intended. A compositor offering a lower
+  version is unsupported and disconnecting is correct, not a `min(version, N)`
+  bug.
+- `draw_block` at (0, 0) and the axis vs axis_discrete angle handling: not bugs.
+  Zeroing the top-left block is valid; the scroll angle/discrete split is
+  deliberate (see the comment in
+  `queue_libinput_event_and_relocate_virtual_cursor`).
+- `LIBINPUT_EVENT_DEVICE_REMOVED` does not synthesize key/button releases: not
+  needed. libinput emits releases for held inputs when a device is removed; the
+  per-device tracking-queue approach was reverted as buggy and must not return.
