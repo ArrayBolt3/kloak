@@ -2626,12 +2626,76 @@ static void release_scheduled_input_events(void) {
   }
 }
 
+static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
+  ssize_t *buf_pos_ptr, bool *do_attach_ptr) {
+  /*
+   * Note that this function intentionally does not use assert() to make it
+   * easier to test.
+   */
+
+  ssize_t rem_len = buf_len - *buf_pos_ptr;
+  struct inotify_event *ie = (void *)(inotify_buf + *buf_pos_ptr);
+  ssize_t struct_len = 0;
+
+  if (rem_len < 0) {
+    *buf_pos_ptr = -1;
+    return NULL;
+  }
+
+  while (true) {
+    if (rem_len < (ssize_t)(sizeof(struct inotify_event))) {
+      *buf_pos_ptr = -1;
+      return NULL;
+    }
+    /* No need to check if ie->len fits in struct_len, uint32_t is too small */
+    struct_len = ((ssize_t)(sizeof(struct inotify_event))
+      + (ssize_t)(ie->len));
+    if (struct_len > rem_len) {
+      *buf_pos_ptr = -1;
+      return NULL;
+    }
+    rem_len -= struct_len;
+    if (rem_len < 0) {
+      *buf_pos_ptr = -1;
+      return NULL;
+    }
+    *(buf_pos_ptr) += struct_len;
+    if (ie->len > 0 && regexec(&evdev_reg, ie->name, 0, NULL, 0) == 0) {
+      if (ie->mask & IN_CREATE) {
+        *(do_attach_ptr) = true;
+      } else {
+        *(do_attach_ptr) = false;
+      }
+      return ie->name;
+    }
+
+    if (rem_len == 0) {
+      break;
+    }
+
+    /*
+     * We can safely disable cast alignment checks here because the kernel
+     * should only provide us properly aligned events. Quoting the manpage:
+     *
+     *     ...This filename is null-terminated, and may include further null
+     *     bytes ('\0') to align subsequent reads to a suitable address
+     *     boundary.
+     */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-align"
+    ie = (struct inotify_event *)((char *)(ie) + struct_len);
+#pragma GCC diagnostic pop
+  }
+
+  return NULL;
+}
+
 static void handle_inotify_events(void) {
   static char *read_buf = NULL;
   ssize_t read_len = 0;
-  ssize_t rem_len = 0;
-  ssize_t struct_len = 0;
-  struct inotify_event *ie;
+  ssize_t buf_pos = 0;
+  bool do_attach = false;
+  char *dev_path = NULL;
 
   if (read_buf == NULL) {
     read_buf = safe_calloc(INOTIFY_READ_BUF_LEN, sizeof(char));
@@ -2651,41 +2715,17 @@ static void handle_inotify_events(void) {
     break;
   }
 
-  ie = (void *)(read_buf);
-  rem_len = read_len;
-  while (true) {
-    assert(rem_len >= (ssize_t)(sizeof(struct inotify_event)));
-    assert(ie->len < SSIZE_MAX - sizeof(struct inotify_event));
-    struct_len = ((ssize_t)(sizeof(struct inotify_event))
-      + (ssize_t)(ie->len));
-    assert(struct_len <= rem_len);
-    rem_len -= struct_len;
-    assert(rem_len >= 0);
-
-    if (ie->len > 0 && regexec(&evdev_reg, ie->name, 0, NULL, 0) == 0) {
-      if (ie->mask & IN_CREATE) {
-        attach_input_device(ie->name);
-      } else {
-        detach_input_device(ie->name);
-      }
+  while (buf_pos != read_len) {
+    dev_path = parse_inotify_events(read_buf, read_len, &buf_pos, &do_attach);
+    assert(buf_pos != -1);
+    if (dev_path == NULL) {
+      continue; /* we could use break too in theory */
     }
-
-    if (rem_len <= 0) {
-      break;
+    if (do_attach) {
+      attach_input_device(dev_path);
+    } else {
+      detach_input_device(dev_path);
     }
-
-    /*
-     * We can safely disable cast alignment checks here because the kernel
-     * should only provide us properly aligned events. Quoting the manpage:
-     *
-     *     ...This filename is null-terminated, and may include further null
-     *     bytes ('\0') to align subsequent reads to a suitable address
-     *     boundary.
-     */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-align"
-    ie = (struct inotify_event *)((char *)(ie) + struct_len);
-#pragma GCC diagnostic pop
   }
 }
 

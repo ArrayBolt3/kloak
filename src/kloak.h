@@ -591,6 +591,14 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
 static void release_scheduled_input_events(void);
 
 /*
+ * Searches for an evdev device name in an inotify buffer and returns it.
+ * Advances buf_pos_ptr to record where it left off, sets buf_pos_ptr to -1 if
+ * an error is encountered.
+ */
+static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
+  ssize_t *buf_pos_ptr, bool *do_attach);
+
+/*
  * Reads inotify events for /dev/input and attempts to add or remove libinput
  * devices as appropriate.
  */
