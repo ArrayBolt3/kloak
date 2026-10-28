@@ -2122,37 +2122,9 @@ static void handle_pointer_button_event(uint32_t ts_milliseconds,
   zwlr_virtual_pointer_v1_frame(state.virt_pointer);
 }
 
-static void handle_key_event(uint32_t ts_milliseconds,
-  uint32_t key_code, enum libinput_key_state key_state) {
+static enum libinput_led calc_next_led_state(uint32_t key_code,
+  enum libinput_key_state key_state) {
   enum libinput_led led_state = 0;
-  xkb_mod_mask_t depressed_mods;
-  xkb_mod_mask_t latched_mods;
-  xkb_mod_mask_t locked_mods;
-  xkb_layout_index_t effective_group;
-
-  if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
-    /*
-     * XKB keycodes == evdev keycodes + 8. Why this design decision was
-     * made, I have no idea.
-     */
-    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_DOWN);
-  } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
-    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_UP);
-  } else {
-    assert(false);
-  }
-  depressed_mods = xkb_state_serialize_mods(
-    state.xkb_state, XKB_STATE_MODS_DEPRESSED);
-  latched_mods = xkb_state_serialize_mods(
-    state.xkb_state, XKB_STATE_MODS_LATCHED);
-  locked_mods = xkb_state_serialize_mods(
-    state.xkb_state, XKB_STATE_MODS_LOCKED);
-  effective_group = xkb_state_serialize_layout(
-    state.xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
-  zwp_virtual_keyboard_v1_modifiers(state.virt_kb, depressed_mods,
-    latched_mods, locked_mods, effective_group);
-  zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key_code,
-    key_state);
 
   /*
    * Generally, X11 and Wayland turn an LED on after a key press, and
@@ -2191,6 +2163,43 @@ static void handle_key_event(uint32_t ts_milliseconds,
   if (caps_lock_state != 0) {
     led_state |= LIBINPUT_LED_CAPS_LOCK;
   }
+
+  return led_state;
+}
+
+static void handle_key_event(uint32_t ts_milliseconds,
+  uint32_t key_code, enum libinput_key_state key_state) {
+  enum libinput_led led_state = 0;
+  xkb_mod_mask_t depressed_mods;
+  xkb_mod_mask_t latched_mods;
+  xkb_mod_mask_t locked_mods;
+  xkb_layout_index_t effective_group;
+
+  if (key_state == LIBINPUT_KEY_STATE_PRESSED) {
+    /*
+     * XKB keycodes == evdev keycodes + 8. Why this design decision was
+     * made, I have no idea.
+     */
+    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_DOWN);
+  } else if (key_state == LIBINPUT_KEY_STATE_RELEASED) {
+    xkb_state_update_key(state.xkb_state, key_code + 8, XKB_KEY_UP);
+  } else {
+    assert(false);
+  }
+  depressed_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_DEPRESSED);
+  latched_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_LATCHED);
+  locked_mods = xkb_state_serialize_mods(
+    state.xkb_state, XKB_STATE_MODS_LOCKED);
+  effective_group = xkb_state_serialize_layout(
+    state.xkb_state, XKB_STATE_LAYOUT_EFFECTIVE);
+  zwp_virtual_keyboard_v1_modifiers(state.virt_kb, depressed_mods,
+    latched_mods, locked_mods, effective_group);
+  zwp_virtual_keyboard_v1_key(state.virt_kb, ts_milliseconds, key_code,
+    key_state);
+
+  led_state = calc_next_led_state(key_code, key_state);
   if (led_state != last_led_state) {
     struct li_device_info *trav_li_device_info = NULL;
     last_led_state = led_state;

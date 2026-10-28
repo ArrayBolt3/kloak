@@ -559,6 +559,13 @@ static void handle_pointer_button_event(uint32_t ts_milliseconds,
   uint32_t button_code, enum libinput_button_state button_state);
 
 /*
+ * Adjusts keyboard LED globals and returns an LED state that should be applied
+ * to all attached keyboards.
+ */
+static enum libinput_led calc_next_led_state(uint32_t key_code,
+  enum libinput_key_state key_state);
+
+/*
  * Processes a key press/release from a libinput event.
  */
 static void handle_key_event(uint32_t ts_milliseconds,
