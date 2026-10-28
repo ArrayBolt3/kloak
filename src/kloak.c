@@ -1912,7 +1912,8 @@ static void damage_surface_enh(struct wl_surface *surface, int32_t x,
   wl_surface_damage_buffer(surface, x, y, width, height);
 }
 
-static void make_virtual_cursor_pos_sane(void) {
+static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
+  double prev_cursor_y_pos, double *cursor_x_ptr, double *cursor_y_ptr) {
   /*
    * We can't just look at the intended final location of the cursor and move
    * it there if that location is valid, since that would allow jumping over
@@ -1944,12 +1945,12 @@ static void make_virtual_cursor_pos_sane(void) {
   struct coord trav_coord = { 0 };
   struct screen_local_coord trav_scr_coord = { 0 };
 
-  assert(cursor_x < INT32_MAX && cursor_x >= 0);
-  assert(cursor_y < INT32_MAX && cursor_y >= 0);
-  start.x = (int32_t)(prev_cursor_x);
-  start.y = (int32_t)(prev_cursor_y);
-  end.x = (int32_t)(cursor_x);
-  end.y = (int32_t)(cursor_y);
+  assert(*cursor_x_ptr < INT32_MAX && *cursor_x_ptr >= 0);
+  assert(*cursor_y_ptr < INT32_MAX && *cursor_y_ptr >= 0);
+  start.x = (int32_t)(prev_cursor_x_pos);
+  start.y = (int32_t)(prev_cursor_y_pos);
+  end.x = (int32_t)(*cursor_x_ptr);
+  end.y = (int32_t)(*cursor_y_ptr);
   prev_trav_coord = start;
   for (int32_t i = 1; ; i++) {
     trav_coord = traverse_line(start, end, i);
@@ -2018,8 +2019,8 @@ static void make_virtual_cursor_pos_sane(void) {
     }
     prev_trav_coord = trav_coord;
   }
-  cursor_x = end.x;
-  cursor_y = end.y;
+  *(cursor_x_ptr) = end.x;
+  *(cursor_y_ptr) = end.y;
 }
 
 static struct input_packet * update_virtual_cursor(void) {
@@ -2068,7 +2069,8 @@ static struct input_packet * update_virtual_cursor(void) {
     }
   }
 
-  make_virtual_cursor_pos_sane();
+  make_virtual_cursor_pos_sane(prev_cursor_x, prev_cursor_y, &cursor_x,
+    &cursor_y);
 
   assert(cursor_x < INT32_MAX && cursor_x >= 0);
   assert(cursor_y < INT32_MAX && cursor_y >= 0);

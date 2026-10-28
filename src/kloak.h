@@ -537,11 +537,12 @@ static void damage_surface_enh(struct wl_surface *surface, int32_t x,
   int32_t y, int32_t width, int32_t height);
 
 /*
- * Adjust cursor_x and cursor_y so that moving the cursor to it does not land
+ * Adjusts a cursor position so that moving the cursor to it does not land
  * in or jump over a void in compositor space, while leaving it as close as
  * possible to the original target location.
  */
-static void make_virtual_cursor_pos_sane(void);
+static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
+  double prev_cursor_y_pos, double *cursor_x_ptr, double *cursor_y_ptr);
 
 /*
  * Updates the virtual cursor's position based on the global cursor_x and
