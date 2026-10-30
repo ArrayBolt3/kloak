@@ -587,6 +587,13 @@ static void handle_libinput_event(struct libinput_event *li_event,
   uint32_t ts_milliseconds);
 
 /*
+ * Helper for register_esc_combo_event that takes key event information as
+ * arguments.
+ */
+static void register_esc_combo_event_helper(uint32_t key_code,
+  enum libinput_key_state key_state);
+
+/*
  * Tracks actively held down keys in the escape key list and terminates kloak
  * if all escape keys are actively being held down.
  */

@@ -2276,26 +2276,15 @@ static void handle_libinput_event(struct libinput_event *li_event,
   libinput_event_destroy(li_event);
 }
 
-static void register_esc_combo_event(struct libinput_event *li_event) {
-  struct libinput_event_keyboard *kb_event = NULL;
-  uint32_t key = 0;
-  enum libinput_key_state key_state = LIBINPUT_KEY_STATE_PRESSED;
-  enum libinput_event_type li_event_type = libinput_event_get_type(li_event);
+static void register_esc_combo_event_helper(uint32_t key_code,
+  enum libinput_key_state key_state) {
   size_t i = 0;
   size_t j = 0;
   bool hit_exit = true;
 
-  if (li_event_type != LIBINPUT_EVENT_KEYBOARD_KEY) {
-    return;
-  }
-
-  kb_event = libinput_event_get_keyboard_event(li_event);
-  key = libinput_event_keyboard_get_key(kb_event);
-  key_state = libinput_event_keyboard_get_key_state(kb_event);
-
   for (i = 0; i < esc_key_list_len; i++) {
     for (j = 0; j < esc_key_sublist_len[i]; j++) {
-      if (esc_key_list[i][j] != key) {
+      if (esc_key_list[i][j] != key_code) {
         continue;
       }
 
@@ -2327,6 +2316,22 @@ static void register_esc_combo_event(struct libinput_event *li_event) {
   }
 }
 
+static void register_esc_combo_event(struct libinput_event *li_event) {
+  struct libinput_event_keyboard *kb_event = NULL;
+  uint32_t key_code = 0;
+  enum libinput_key_state key_state = LIBINPUT_KEY_STATE_PRESSED;
+  enum libinput_event_type li_event_type = libinput_event_get_type(li_event);
+
+  if (li_event_type != LIBINPUT_EVENT_KEYBOARD_KEY) {
+    return;
+  }
+
+  kb_event = libinput_event_get_keyboard_event(li_event);
+  key_code = libinput_event_keyboard_get_key(kb_event);
+  key_state = libinput_event_keyboard_get_key_state(kb_event);
+  register_esc_combo_event_helper(key_code, key_state);
+}
+
 static void queue_libinput_event_and_relocate_virtual_cursor(
   struct libinput_event *li_event) {
   struct input_packet *ev_packet = NULL;
@@ -2349,9 +2354,9 @@ static void queue_libinput_event_and_relocate_virtual_cursor(
     assert(state.global_space_width >= 0);
     assert(state.global_space_height >= 0);
     abs_x = libinput_event_pointer_get_absolute_x_transformed(
-      pointer_event, (uint32_t)(state.global_space_width));
+      pointer_event, (uint32_t)(state.global_space_width - 1));
     abs_y = libinput_event_pointer_get_absolute_y_transformed(
-      pointer_event, (uint32_t)(state.global_space_height));
+      pointer_event, (uint32_t)(state.global_space_height - 1));
     prev_cursor_x = cursor_x;
     prev_cursor_y = cursor_y;
     cursor_x = abs_x + state.pointer_space_x;
