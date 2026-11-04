@@ -1,44 +1,55 @@
 /*
- * Copyright (c) 2025 - 2025 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
- * See the file COPYING for copying conditions.
+ * SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 /*********************************/
-/* static defines, do not change */
+/* Static defines, do not change */
 /*********************************/
-#define ALPHABET_LEN 26
-#define ASCII_UPPERCASE_START 65
-#define ASCII_LOWERCASE_START 97
-#define UNIX_SOCK_PATH_MAX 107
-/*
- * See the scroll handling comment in
- * queue_libinput_event_and_relocate_virtual_cursor() for details on why the
- * scroll-related values below were chosen.
- */
-#define SCROLL_UNITS_PER_TICK 120
-#define SCROLL_UNITS_PER_TICK_D 120.0
-#define SCROLL_ANGLE_PER_TICK 15
-#define SCROLL_ANGLE_TO_UNITS_FACTOR_D 8.0
 
-/*******************/
-/* tunable defines */
-/*******************/
-#define MAX_SCREEN_COUNT 128
-#define CURSOR_RADIUS 15
-#define DEFAULT_MAX_DELAY_MS 100
-#define DEFAULT_STARTUP_TIMEOUT_MS 500
-#define MAX_UNRELEASED_FRAMES 3
+/* Absolute path to the kloakwl executable. */
+#define KLOAKWL_PATH "/usr/bin/kloakwl"
+/* Number of fds watched by the main loop poll. */
 #define POLL_FD_COUNT 3
+/*
+ * Number to multiply degrees of rotation by to get 120ths of a scroll tick.
+ * See the comment about scroll handling in process_libinput_event for more
+ * details.
+ */
+#define SCROLL_ANGLE_TO_UNITS_FACTOR_D 8.0
+/* The length of the buffer to read inotify events into. */
 #define INOTIFY_READ_BUF_LEN 16384
-#define MAX_INIT_ATTEMPTS 8
 
 /*******************/
-/* core structures */
+/* Tunable defines */
 /*******************/
+
+/*
+ * Default value for the maximum delay between an input event's arrival and
+ * release.
+ */
+#define DEFAULT_MAX_DELAY_MS 100
+/* Default value for the delay between kloak start and initialization. */
+#define DEFAULT_STARTUP_TIMEOUT_MS 500
+/* Default escape key sequence to make kloak terminate. */
+#define DEFAULT_ESC_KEY_STR "KEY_RIGHTSHIFT,KEY_ESC"
+
+/***********/
+/* Structs */
+/***********/
+
+/* Defines an evdev key code and the corresponding string. */
+struct key_name_value {
+    const char *name;
+    const uint32_t value;
+};
 
 /*
  * Defines a libinput device on the system by its device pointer and file
  * name. Intended for use in a doubly-linked list.
+ *
+ * Note: This struct isn't terribly useful at the moment, but it gives us the
+ * flexibility to attach data to libinput devices in the future if needed.
  */
 struct li_device_info {
   struct libinput_device *device;
@@ -47,189 +58,10 @@ struct li_device_info {
   LIST_ENTRY(li_device_info) ldi_entries;
 };
 
-/*
- * Defines an evdev key code and the corresponding string.
- */
-struct key_name_value {
-    const char *name;
-    const uint32_t value;
-};
 
-/*
- * Defines a screen-local layer that can be drawn on. Each screen has one
- * drawable layer, the virtual cursor is drawn on this. The layer will be
- * created using layer_shell and will appear on top of all other surfaces if
- * at all possible.
- */
-struct drawable_layer {
-  struct wl_output *output;
-  struct wl_buffer *buffer_list[MAX_UNRELEASED_FRAMES];
-  int32_t width;
-  int32_t height;
-  int32_t stride;
-  int32_t size;
-  uint32_t *pixbuf;
-  struct wl_surface *surface;
-  struct wl_shm_pool *shm_pool;
-  /* Layer shell stuff */
-  struct zwlr_layer_surface_v1 *layer_surface;
-  bool layer_surface_configured;
-  /* Sync state */
-  bool frame_in_use[MAX_UNRELEASED_FRAMES];
-  bool frame_pending;
-  int32_t last_drawn_cursor_x;
-  int32_t last_drawn_cursor_y;
-  int32_t cursor_x_pos_list[MAX_UNRELEASED_FRAMES];
-  int32_t cursor_y_pos_list[MAX_UNRELEASED_FRAMES];
-};
-
-/*
- * Defines the location and size of a display in compositor-global space.
- */
-struct output_geometry {
-  int32_t x;
-  int32_t y;
-  int32_t width;
-  int32_t height;
-};
-
-/*
- * Defines a point in screen-local space, along with which screen the point is
- * located on.
- */
-struct screen_local_coord {
-  int32_t x;
-  int32_t y;
-  int32_t output_idx;
-  bool valid;
-};
-
-/*
- * Defines a point in no particular space.
- */
-struct coord {
-  int32_t x;
-  int32_t y;
-};
-
-/*
- * Defines the type of a buffered input event.
- */
-enum input_packet_type {
-  KLOAK_PACKET_TYPE_MOUSEMOVE,
-  KLOAK_PACKET_TYPE_MOUSESCROLL,
-  KLOAK_PACKET_TYPE_LIBINPUT
-};
-
-/*
- * A container for storing the actual data in an input_packet, as explained
- * below.
- */
-union input_packet_data {
-  struct {
-    int32_t cursor_x;
-    int32_t cursor_y;
-  } mousemove;
-
-  struct {
-    int32_t vert_scroll_ticks;
-    int32_t horiz_scroll_ticks;
-  } mousescroll;
-
-  struct {
-    struct libinput_event *li_event;
-  } libinput;
-};
-
-/*
- * Defines a buffered input event. Three types of events are supported, mouse
- * movement events, scroll events, and libinput events.
- *
- * - Mouse movement events are defined as a cursor position in compositor
- *   global space.
- * - Scroll events are defined as a pair of scroll "tick" values, one for each
- *   dimension (vertical and horizontal).
- * - libinput events are raw events directly from libinput, intended for
- *   release unmodified at a later time.
- *
- * All kinds of events have a scheduled release time.
- *
- * The actual data of the input packet is in the `data` field. The fields of
- * `data` (mousemove, mousescroll, libinput) correspond to the
- * `KLOAK_PACKET_TYPE_MOUSEMOVE`, `KLOAK_PACKET_TYPE_MOUSESCROLL`, and
- * `KLOAK_PACKET_TYPE_LIBINPUT` packet types, respectively.
- */
-struct input_packet {
-  enum input_packet_type packet_type;
-  int64_t sched_time;
-  TAILQ_ENTRY(input_packet) evq_entries;
-  union input_packet_data data;
-};
-
-/*
- * Monolithic Wayland state object.
- */
-struct disp_state {
-  struct wl_display *display;
-  int display_fd;
-  struct wl_registry *registry;
-  struct wl_shm *shm;
-  struct wl_compositor *compositor;
-  struct wl_seat *seat;
-  const char *seat_name;
-  uint32_t seat_caps;
-  bool seat_set;
-  struct wl_keyboard *kb;
-  struct wl_output *outputs[MAX_SCREEN_COUNT];
-  uint32_t output_names[MAX_SCREEN_COUNT];
-  struct zxdg_output_manager_v1 *xdg_output_manager;
-  struct zxdg_output_v1 *xdg_outputs[MAX_SCREEN_COUNT];
-  bool xdg_output_reconfig_flags[MAX_SCREEN_COUNT];
-  bool wl_output_remove_flags[MAX_SCREEN_COUNT];
-  struct output_geometry *output_geometries[MAX_SCREEN_COUNT];
-  struct output_geometry *pending_output_geometries[MAX_SCREEN_COUNT];
-  int32_t global_space_width;
-  int32_t global_space_height;
-  int32_t pointer_space_x;
-  int32_t pointer_space_y;
-  int32_t pointer_space_right_edge;
-  int32_t pointer_space_bottom_edge;
-  struct zwlr_layer_shell_v1 *layer_shell;
-  struct zwlr_virtual_pointer_manager_v1 *virt_pointer_manager;
-  struct zwp_virtual_keyboard_manager_v1 *virt_kb_manager;
-  struct zwp_virtual_keyboard_v1 *virt_kb;
-  struct zwlr_virtual_pointer_v1 *virt_pointer;
-  bool virt_kb_keymap_set;
-  struct xkb_context *xkb_ctx;
-  struct xkb_keymap *xkb_keymap;
-  struct xkb_state *xkb_state;
-  char *old_kb_map_shm;
-  int32_t old_kb_map_shm_size;
-  struct drawable_layer *layers[MAX_SCREEN_COUNT];
-};
-
-/***************/
-/* core unions */
-/***************/
-
-/*
- * A 64-bit signed integer with direct access to the constituent bytes. Used
- * to allow getting 64-bit integers from /dev/urandom.
- */
-union rand_int64 {
-  int64_t val;
-  char raw[sizeof(int64_t)];
-};
-
-/*********************/
-/* utility functions */
-/*********************/
-
-/*
- * Allocates the requested amount of memory and returns a pointer to it. Kills
- * the process if the allocation fails.
- */
-static void *safe_calloc(size_t nmemb, size_t size);
+/*******************************/
+/* Utility function prototypes */
+/*******************************/
 
 /*
  * Reallocates the requested amount of memory and returns a pointer to it.
@@ -237,123 +69,35 @@ static void *safe_calloc(size_t nmemb, size_t size);
  */
 static void *safe_reallocarray(void *ptr, size_t nmemb, size_t size);
 
-/*
- * Duplicates a string. Kills the process if allocation fails.
- */
-static char *safe_strdup(const char *s);
-
-/*
- * Opens a file. Kills the process if the open fails.
- */
-static int safe_open(const char *pathname, int flags);
-
-/*
- * Closes a file. Kills the process if the close fails.
- */
-static void safe_close(int fd);
-
-/*
- * Opens a directory. Kills the process if the open fails.
- */
+/* Opens a directory. Kills the process if the open fails. */
 static DIR *safe_opendir(const char *name);
 
-/*
- * Closes a directory. Kills the process if the close fails.
- */
+/* Closes a directory. Kills the process if the close fails. */
 static void safe_closedir(DIR *dirp);
 
-/*
- * Converts a timespec to a millisecond count.
- */
-static int64_t timespec_to_ms(struct timespec spec);
-
-/*
- * Converts a millisecond count to a timespec.
- */
+/* Converts a millisecond count to a timespec. */
 static struct timespec ms_to_timespec(int64_t ms);
 
-/*
- * Increments the reference count of an li_device_info struct.
- */
-static void li_device_info_ref(struct li_device_info *ldi);
+/* Looks up a key code in the key table. */
+static uint32_t lookup_keycode(const char *name);
+
+/* Attempts to add an input device to the current libinput context. */
+static void attach_input_device(const char *dev_name);
+
+/* Attempts to remove an input device from the current libinput context. */
+static void detach_input_device(const char *dev_name);
 
 /*
- * Decrements the reference count of an li_device_info struct,
+ * Increments the reference count of an li_device_info struct. Not currently
+ * in use.
+ */
+/*static void li_device_info_ref(struct li_device_info *ldi);*/
+
+/*
+ * Decrements the reference count of an li_device_info struct, freeing it if
+ * possible.
  */
 static void li_device_info_unref(struct li_device_info *ldi);
-
-/*
- * Reads the specified number of random bytes from /dev/urandom into the
- * specified buffer. applayer_random_init must be called before this function
- * will behave as intended.
- */
-static void read_random(char *buf, ssize_t len);
-
-/*
- * Populates a string with a number of random characters in the set [a-zA-Z].
- */
-static void randname(char *buf, ssize_t len);
-
-/*
- * Creates a mmap-able shared memory file of the specified size.
- */
-static int create_shm_file(ssize_t size);
-
-/*
- * Returns a monotonic 64-bit timestamp.
- */
-static int64_t current_time_ms(void);
-
-/*
- * Generates a random 64-bit number between lower and upper inclusive. Uses
- * /dev/urandom as its source.
- */
-static int64_t random_between(int64_t lower, int64_t upper);
-
-/*
- * Determine if two screens are touching or overlapping given their
- * geometries.
- */
-static bool check_screen_touch(struct output_geometry scr1,
-  struct output_geometry scr2);
-
-/*
- * Checks screen continuity and calculates the size of the global compositor
- * space and the location of the upper-left corner of the pointer's coordinate
- * space. Returns true on success, false if there are gaps between displays.
- */
-static bool recalc_global_space(struct disp_state *param_state);
-
-/*
- * Converts a set of coordinates in global compositor space to a set of
- * coordinates in screen-local space.
- */
-static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
-  int32_t y);
-
-/*
- * Converts a set of coordinates in screen-local space to a set of coordinates
- * in compositor-global space.
- */
-static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
-  int32_t output_idx);
-
-/*
- * Takes two points that define a line on a 2d plane, and outputs the
- * coordinate corresponding to the pixel that is 'pos' pixels away from the
- * origin point. It is not possible to walk beyond the end coordinates, and the
- * end coordiante will always be included in the output.
- */
-static struct coord traverse_line(struct coord start, struct coord end,
-  int32_t pos);
-
-/*
- * Draws a virtual cursor block on the specified pixel buffer. If crosshair is
- * set to true, crosshairs representing the cursor will be drawn in the block,
- * otherwise the block will simply blank out anything that it is drawing over.
- */
-static void draw_block(uint32_t * pixbuf, int32_t offset, int32_t x, int32_t y,
-  int32_t layer_width, int32_t layer_height, int32_t rad, bool crosshair);
 
 /*
  * Parse an option parameter as an integer between 0 and INT32_MAX, and save
@@ -367,134 +111,12 @@ static bool parse_uint31_arg(const char *val, int base, int32_t *out);
  */
 static bool parse_uint32_arg(const char *val, int base, uint32_t *out);
 
-/*
- * Sleeps for the specified number of milliseconds.
- */
+/* Sleeps for the specified number of milliseconds. */
 static int32_t sleep_ms(int64_t ms);
 
-/*
- * Allocates a formatted string and returns a pointer to it. It is the caller's
- * responsibility to free this when it is no longer in use.
- */
-static char *sgenprintf(const char *str, ...);
-
-/*
- * Looks up a key code in the key table.
- */
-static uint32_t lookup_keycode(const char *name);
-
-/*
- * Attempts to add an input device to the current libinput context.
- */
-static void attach_input_device(const char *dev_name);
-
-/*
- * Attempts to remove an input device from the current libinput context.
- */
-static void detach_input_device(const char *dev_name);
-
-/*
- * Extracts a whole number of scroll ticks from a scroll accumulator,
- * modifying the accumulator's value as appropriate to remove that number of
- * ticks from it.
- */
-static int32_t get_ticks_from_scroll_accum(double *accum_ptr);
-
-/*
- * Attempts to flush the display queue. If an EAGAIN error is received, sets
- * up the ev_fds poll array to trigger on POLLOUT for the Wayland display's
- * fd, otherwise ensures that POLLOUT is unset on that fd. If any other error
- * is received, aborts the program.
- */
-static void wl_display_flush_safe(struct wl_display *display);
-
-/*
- * Attempts to dispatch pending Wayland events, aborts the program on failure.
- */
-static void wl_display_dispatch_pending_safe(struct wl_display *display);
-
-/*
- * Same as above, but for wl_display_roundtrip.
- */
-static void wl_display_roundtrip_safe(struct wl_display *display);
-
-/*
- * Sets up structures, objects, and listeners for a newly attached display.
- */
-static void wl_init_new_display(struct disp_state *param_state,
-  ssize_t disp_idx);
-
-/*
- * Checks if a display state sync can be done. If so, commits pending geometry
- * information, cleans up removed displays and their associated data, and
- * recalculates global space.
- */
-static void display_sync_maybe(struct disp_state *state);
-
-/*
- * Forces the virtual cursor back within the bounds of compositor global space
- * if it strays beyond it. Note that this function does NOT get the cursor
- * certainly back on a screen.
- */
-static bool clamp_cursor(void);
-
-/********************/
-/* wayland handling */
-/********************/
-
-static void registry_handle_global(void * data, struct wl_registry * registry,
-  uint32_t name, const char * interface, uint32_t version);
-static void registry_handle_global_remove(void *data,
-  struct wl_registry * registry, uint32_t name);
-static void seat_handle_name(void *data, struct wl_seat *seat,
-  const char *name);
-static void seat_handle_capabilities(void *data, struct wl_seat *seat,
-  uint32_t capabilities);
-static void kb_handle_keymap(void *data, struct wl_keyboard *kb,
-  uint32_t format, int32_t fd, uint32_t size);
-static void kb_handle_enter(void *data, struct wl_keyboard *kb,
-  uint32_t serial, struct wl_surface *surface, struct wl_array *keys);
-static void kb_handle_leave(void *data, struct wl_keyboard *kb,
-  uint32_t serial, struct wl_surface *surface);
-static void kb_handle_key(void *data, struct wl_keyboard *kb, uint32_t serial,
-  uint32_t time, uint32_t key, uint32_t state);
-static void kb_handle_modifiers(void *data, struct wl_keyboard *kb,
-  uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched,
-  uint32_t mods_locked, uint32_t group);
-static void kb_handle_repeat_info(void *data, struct wl_keyboard *kb,
-  int32_t rate, int32_t delay);
-static void wl_buffer_release(void *data, struct wl_buffer * buffer);
-static void wl_output_handle_geometry(void *data, struct wl_output *output,
-  int32_t x, int32_t y, int32_t physical_width, int32_t physical_height,
-  int32_t subpixel, const char *make, const char *model, int32_t transform);
-static void wl_output_handle_mode(void *data, struct wl_output *output,
-  uint32_t flags, int32_t width, int32_t height, int32_t refresh);
-static void wl_output_info_done(void *data, struct wl_output *output);
-static void wl_output_handle_scale(void *data, struct wl_output *output,
-  int32_t factor);
-static void wl_output_handle_name(void *data, struct wl_output *output,
-  const char *name);
-static void wl_output_handle_description(void *data, struct wl_output *output,
-  const char *description);
-static void xdg_output_handle_logical_position(void *data,
-  struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y);
-static void xdg_output_handle_logical_size(void *data,
-  struct zxdg_output_v1 *xdg_output, int32_t width, int32_t height);
-static void xdg_output_info_done(void *data,
-  struct zxdg_output_v1 *xdg_output);
-static void xdg_output_handle_name(void *data,
-  struct zxdg_output_v1 *xdg_output, const char *name);
-static void xdg_output_handle_description(void *data,
-  struct zxdg_output_v1 *xdg_output, const char *description);
-static void layer_surface_configure(void *data,
-  struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial, uint32_t width,
-  uint32_t height);
-static void layer_surface_closed(void *data,
-  struct zwlr_layer_surface_v1 *layer_surface);
-
-/*********************/
-/* libinput handling */
-/*********************/
+/*****************************************/
+/* libinput handling function prototypes */
+/*****************************************/
 
 /*
  * Opens evdev devices for libinput, grabbing them with EVIOCGRAB so that they
@@ -502,115 +124,21 @@ static void layer_surface_closed(void *data,
  */
 static int li_open_restricted(const char *path, int flags, void * user_data);
 
-/*
- * Closes evdev devices for libinput.
- */
+/* Closes evdev devices for libinput. */
 static void li_close_restricted(int fd, void *user_data);
 
-/************************/
-/* high-level functions */
-/************************/
+/**********************************/
+/* High-level function prototypes */
+/**********************************/
 
-/*
- * Attempts to update the specified layer to display the virtual cursor at the
- * right location. May do nothing if the compositor has not yet acknowledged a
- * previously sent frame, there is no pending changes that affect the
- * specified layer, or kloak hasn't yes negotiated an appropriate
- * configuration for the layer with the compositor.
- */
-static void draw_frame(struct drawable_layer *layer);
-
-/*
- * Allocates a drawable_layer struct for the specified display, and registers
- * it with the compositor.
- */
-static struct drawable_layer *allocate_drawable_layer(
-  struct disp_state *param_state, struct wl_output *output);
-
-/*
- * Damages the specified region of the specified surface. Takes the same
- * arguments as wl_surface_damage_buffer, but clamps the x and y parameters to
- * 0 if they're below zero when passed in. This works around undesirable
- * behavior when passing negative x and y values to wl_surface_damage_buffer.
- */
-static void damage_surface_enh(struct wl_surface *surface, int32_t x,
-  int32_t y, int32_t width, int32_t height);
-
-/*
- * Adjusts a cursor position so that moving the cursor to it does not land
- * in or jump over a void in compositor space, while leaving it as close as
- * possible to the original target location.
- */
-static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
-  double prev_cursor_y_pos, double *cursor_x_ptr, double *cursor_y_ptr);
-
-/*
- * Updates the virtual cursor's position based on the global cursor_x and
- * cursor_y variables. This will create a new mouse movement event if there
- * isn't one already queued, and update a queued mouse movement event to
- * reflect the current virtual cursor position otherwise.
- */
-static struct input_packet *update_virtual_cursor(void);
-
-/*
- * Updates the scroll accumulators. If enough scroll movement has accumulated
- * to scroll one or more ticks, this will create a new mouse scroll event if
- * there isn't an appropriate one already queued, and update a queued scroll
- * event to reflect the new scroll quantity otherwise.
- */
-static struct input_packet *update_mouse_scroll(void);
-
-/*
- * Processes a button press/release from a libinput event.
- */
-static void handle_pointer_button_event(uint32_t ts_milliseconds,
-  uint32_t button_code, enum libinput_button_state button_state);
-
-/*
- * Adjusts keyboard LED globals and returns an LED state that should be applied
- * to all attached keyboards.
- */
-static enum libinput_led calc_next_led_state(uint32_t key_code,
-  enum libinput_key_state key_state);
-
-/*
- * Processes a key press/release from a libinput event.
- */
-static void handle_key_event(uint32_t ts_milliseconds,
-  uint32_t key_code, enum libinput_key_state key_state);
-
-/*
- * Processes a libinput event, sending emulated input to the compositor as
- * appropriate.
- */
-static void handle_libinput_event(struct libinput_event *li_event,
-  uint32_t ts_milliseconds);
-
-/*
- * Helper for register_esc_combo_event that takes key event information as
- * arguments.
- */
-static void register_esc_combo_event_helper(uint32_t key_code,
-  enum libinput_key_state key_state);
+/* Parses an escape key specification into the escape key globals. */
+static void parse_esc_key_str(const char *esc_key_str);
 
 /*
  * Tracks actively held down keys in the escape key list and terminates kloak
  * if all escape keys are actively being held down.
  */
-static void register_esc_combo_event(struct libinput_event *li_event);
-
-/*
- * Schedules a libinput event for future release to the compositor. As a side
- * effect, also redraws the virtual cursor if needed.
- */
-static void queue_libinput_event_and_relocate_virtual_cursor(
-  struct libinput_event *li_event);
-
-/*
- * Finds all queued input events that are ready to be released, and process
- * them.
- */
-static void release_scheduled_input_events(void);
+static void register_esc_combo_event(struct button_event key_event);
 
 /*
  * Searches for an evdev device name in an inotify buffer and returns it.
@@ -627,40 +155,38 @@ static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
 static void handle_inotify_events(void);
 
 /*
- * Parses an escape key specification into the escape key globals.
+ * Adjusts keyboard LED globals and returns an LED state that should be applied
+ * to all attached keyboards.
  */
-static void parse_esc_key_str(const char *esc_key_str);
+static enum libinput_led calc_next_led_state(struct button_event key_event);
+
+/* Adjusts keyboard LEDs in response to a keyboard event if appropriate. */
+static void register_keyboard_led_event(struct button_event key_event);
 
 /*
- * Determines how long the core event loop's `poll` should sleep for.
+ * Dispatches libinput event details to handler functions and forwards them to
+ * the child where appropriate.
  */
-static int calc_poll_timeout(void);
+static void process_libinput_event(struct libinput_event *li_event);
 
-/*
- * Prints usage information.
- */
+/* Updates parent state with the contents of the next child message. */
+static void process_child_message(void);
+
+/* Prints usage information. */
 static void print_usage(void);
 
-/****************************/
-/* initialization functions */
-/****************************/
+/**************************************/
+/* Initialization function prototypes */
+/**************************************/
 
-/*
- * Opens /dev/urandom so that other parts of the system that need random
- * values can get them.
- */
-static void applayer_random_init(void);
-
-/*
- * Compiles regexes.
- */
+/* Compiles regexes. */
 static void applayer_regex_init(void);
 
-/*
- * Connects to the wayland compositor and begins initialization of the Wayland
- * state.
- */
-static void applayer_wayland_init(void);
+/* Sets up communication pipes and starts the kloakwl child process. */
+static void applayer_kloakwl_init(void);
+
+/* Watches /dev/input for device creation and deletion. */
+static void applayer_inotify_init(void);
 
 /*
  * Opens all available input devices with libinput and prepares to process
@@ -668,14 +194,7 @@ static void applayer_wayland_init(void);
  */
 static void applayer_libinput_init(void);
 
-/*
- * Watches /dev/input for device creation and deletion.
- */
-static void applayer_inotify_init(void);
-
-/*
- * Initializes the fd poll mechanism.
- */
+/* Sets up poll fds. */
 static void applayer_poll_init(void);
 
 /*
@@ -685,53 +204,8 @@ static void applayer_poll_init(void);
 static void check_dup_arg_and_mark(int opt, int *seen_opts,
   ssize_t *seen_opts_pos_ptr);
 
-/*
- * Parses command-line arguments.
- */
+/* Parses command-line arguments. */
 static void parse_cli_args(int argc, char **argv);
-
-/*********************/
-/* wayland callbacks */
-/*********************/
-
-static const struct wl_registry_listener registry_listener = {
-  .global = registry_handle_global,
-  .global_remove = registry_handle_global_remove,
-};
-static const struct wl_seat_listener seat_listener = {
-  .name = seat_handle_name,
-  .capabilities = seat_handle_capabilities,
-};
-static const struct wl_keyboard_listener kb_listener = {
-  .keymap = kb_handle_keymap,
-  .enter = kb_handle_enter,
-  .leave = kb_handle_leave,
-  .key = kb_handle_key,
-  .modifiers = kb_handle_modifiers,
-  .repeat_info = kb_handle_repeat_info,
-};
-static const struct wl_buffer_listener buffer_listener = {
-  .release = wl_buffer_release,
-};
-static const struct wl_output_listener output_listener = {
-  .geometry = wl_output_handle_geometry,
-  .mode = wl_output_handle_mode,
-  .done = wl_output_info_done,
-  .scale = wl_output_handle_scale,
-  .name = wl_output_handle_name,
-  .description = wl_output_handle_description,
-};
-static const struct zxdg_output_v1_listener xdg_output_listener = {
-  .logical_position = xdg_output_handle_logical_position,
-  .logical_size = xdg_output_handle_logical_size,
-  .done = xdg_output_info_done,
-  .name = xdg_output_handle_name,
-  .description = xdg_output_handle_description,
-};
-static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
-  .configure = layer_surface_configure,
-  .closed = layer_surface_closed,
-};
 
 /**********************/
 /* libinput callbacks */

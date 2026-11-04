@@ -7,7 +7,6 @@ include <tunables/global>
 /usr/bin/kloak {
   include <local/usr.bin.kloak>
 
-  network unix stream,
   network netlink raw,
 
   signal receive set=cont peer=unconfined,
