@@ -1344,7 +1344,8 @@ int main(int argc, char **argv) {
     }
 
     do {
-      poll_ret = poll(ev_fds, POLL_FD_COUNT, -1);
+      poll_ret = poll(ev_fds, POLL_FD_COUNT,
+        parse_ring_data_len == 0 ? -1 : 0);
     } while (poll_ret == -1 && errno == EINTR);
     if (poll_ret == -1) {
       fprintf(stderr, "FATAL ERROR: 'poll' errored out: %s\n",

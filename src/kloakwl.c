@@ -384,14 +384,13 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
 }
 
 struct coord traverse_line(struct coord start, struct coord end,
-  int32_t pos) {
+  int32_t pos, bool *out_success) {
   /*
    * Based on Zingl Alois' implementation of Bresenham's algorithm for line
    * drawing (https://zingl.github.io/bresenham.c function plotLine()),
    * modified to return a specific point from a line rather than drawing the
    * whole line to a canvas.
    */
-  static struct coord fail_coord = { .x = -1, .y = -1 };
   static struct coord last_start = { 0 };
   static struct coord last_end = { 0 };
   static struct coord work_coord = { 0 };
@@ -404,6 +403,7 @@ struct coord traverse_line(struct coord start, struct coord end,
   int32_t i = 0;
 
   assert(pos >= 0);
+  *out_success = true;
 
   /*
    * We could include code to traverse the line backwards when needed, but
@@ -425,7 +425,8 @@ struct coord traverse_line(struct coord start, struct coord end,
   }
 
   if (pos > max_pos) {
-    return fail_coord;
+    *out_success = false;
+    return work_coord;
   }
   if (pos == last_pos) {
     return work_coord;
@@ -1497,6 +1498,10 @@ static int calc_poll_timeout(void) {
   const struct input_packet *packet = NULL;
   int64_t timeout_duration = 0;
 
+  if (parse_ring_data_len > 0) {
+    return 0;
+  }
+
   packet = TAILQ_FIRST(&evq_head);
   if (packet == NULL) {
     return -1;
@@ -1568,8 +1573,9 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   end.y = (int32_t)(*cursor_y_ptr);
   prev_trav_coord = start;
   for (int32_t i = 1; ; i++) {
-    trav_coord = traverse_line(start, end, i);
-    if (trav_coord.x == -1 && trav_coord.y == -1) {
+    bool traverse_line_success = false;
+    trav_coord = traverse_line(start, end, i, &traverse_line_success);
+    if (!traverse_line_success) {
       end.x = prev_trav_coord.x;
       end.y = prev_trav_coord.y;
       break;
@@ -1673,7 +1679,9 @@ static struct input_packet *update_virtual_cursor(void) {
         struct coord sane_location = screen_local_coord_to_abs_coord(0, 0, i,
           &sane_location_valid);
 
-        assert(sane_location_valid);
+        if (!sane_location_valid) {
+          continue;
+        }
         assert(sane_location.x <= INT32_MAX && sane_location.x >= INT32_MIN);
         assert(sane_location.y <= INT32_MAX && sane_location.y >= INT32_MIN);
         prev_cursor_x = sane_location.x;
@@ -1874,8 +1882,15 @@ static void release_scheduled_input_events(void) {
     case KLOAK_PACKET_TYPE_MOUSEMOVE:
       pointer_x = ev_packet->data.coord_data.x - state.pointer_space_x;
       pointer_y = ev_packet->data.coord_data.y - state.pointer_space_y;
-      assert(pointer_x >= 0);
-      assert(pointer_y >= 0);
+      if (pointer_x < 0 || pointer_y < 0
+        || pointer_x >= state.global_space_width
+        || pointer_y >= state.global_space_height) {
+        /*
+         * Mouse event is no longer valid, probably due to display state
+         * change.
+         */
+        break;
+      }
       zwlr_virtual_pointer_v1_motion_absolute(
         state.virt_pointer, (uint32_t)(ev_packet->sched_time),
         (uint32_t)(pointer_x), (uint32_t)(pointer_y),
@@ -2470,7 +2485,7 @@ int main(int argc, char **argv) {
     wl_display_flush_safe(state.display);
 
     if (ev_fds[0].revents & POLLIN) {
-      while (true) {
+      for (int8_t i = 0; i < MAX_PARENT_BATCH_MESSAGES; i++) {
         if (!process_parent_message()) {
           break;
         }

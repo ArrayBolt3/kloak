@@ -35,18 +35,27 @@
  * requires more memory.
  */
 #define MAX_SCREEN_COUNT 128
+
 /*
  * Maximum number of times to roundtrip with the compositor during Wayland
  * initialization.
  */
 #define MAX_INIT_ATTEMPTS 8
+
 /* Number of frames to allow to be in-flight per screen. */
 #define MAX_UNRELEASED_FRAMES 3
+
 /*
  * Number of pixels the virtual cursor crosshair should extend beyond the
  * center pixel.
  */
 #define CURSOR_RADIUS 15
+
+/*
+ * Number of messages the child will try to fetch and process from the parent
+ * in a row before stopping to handle Wayland concerns.
+ */
+#define MAX_PARENT_BATCH_MESSAGES 32
 
 /**********************/
 /* Structs and unions */
@@ -238,7 +247,7 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
  * end coordiante will always be included in the output.
  */
 static struct coord traverse_line(struct coord start, struct coord end,
-  int32_t pos);
+  int32_t pos, bool *out_success);
 
 /* Draws a crosshair or block of blank pixels on the specified pixel buffer. */
 static void draw_block(uint32_t * pixbuf, int32_t offset, int32_t x, int32_t y,

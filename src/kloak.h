@@ -7,9 +7,13 @@
 /* Static defines, do not change */
 /*********************************/
 
-/* Absolute path to the kloakwl executable. */
-/*#define KLOAKWL_PATH "/usr/bin/kloakwl"*/
-#define KLOAKWL_PATH "/home/user/derivative-maker/packages/whonix/kloak/kloakwl"
+/*
+ * Absolute path to the kloakwl executable.
+ *
+ * TODO: Make this somehow dependent on the prefix kloak is installed into, so
+ * as to not break installation into locations other than /usr/bin.
+ */
+#define KLOAKWL_PATH "/usr/bin/kloakwl"
 /* Number of fds watched by the main loop poll. */
 #define POLL_FD_COUNT 3
 /*
