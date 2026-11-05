@@ -611,10 +611,12 @@ static void *pop_ring_buffer_msg(enum ptc_packet_type *out_type,
     coord_ptr = (struct coord *)(out_ptr);
     memcpy(&coord_ptr->x, parse_ring_block + tmp_parse_ring_read_loc,
       sizeof(int32_t));
+    assert(coord_ptr->x >= 0);
     tmp_parse_ring_read_loc += (ssize_t)(sizeof(int32_t));
     tmp_parse_ring_data_len -= (ssize_t)(sizeof(int32_t));
     memcpy(&coord_ptr->y, parse_ring_block + tmp_parse_ring_read_loc,
       sizeof(int32_t));
+    assert(coord_ptr->y >= 0);
     tmp_parse_ring_read_loc += (ssize_t)(sizeof(int32_t));
     tmp_parse_ring_data_len -= (ssize_t)(sizeof(int32_t));
     break;

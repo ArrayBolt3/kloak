@@ -8,7 +8,8 @@
 /*********************************/
 
 /* Absolute path to the kloakwl executable. */
-#define KLOAKWL_PATH "/usr/bin/kloakwl"
+/*#define KLOAKWL_PATH "/usr/bin/kloakwl"*/
+#define KLOAKWL_PATH "/home/user/derivative-maker/packages/whonix/kloak/kloakwl"
 /* Number of fds watched by the main loop poll. */
 #define POLL_FD_COUNT 3
 /*
@@ -146,7 +147,7 @@ static void register_esc_combo_event(struct button_event key_event);
  * an error is encountered.
  */
 static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
-  ssize_t *buf_pos_ptr, bool *do_attach);
+  ssize_t *buf_pos_ptr, bool *do_attach_ptr, bool *inotify_overflow_ptr);
 
 /*
  * Reads inotify events for /dev/input and attempts to add or remove libinput

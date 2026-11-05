@@ -92,29 +92,6 @@ static int64_t start_time = 0;
 /* Utility functions */
 /*********************/
 
-static bool parse_int(const char *val, int base, int *out) {
-  char *val_endchar = NULL;
-  int64_t val_int = 0;
-
-  if (val == NULL || out == NULL) {
-    return false;
-  }
-  if (*val == '\0'
-    || isspace((unsigned char)(*val))) {
-    return false;
-  }
-  errno = 0;
-  val_int = strtol(val, &val_endchar, base);
-  if (errno == ERANGE
-    || *val_endchar != '\0'
-    || val_int > INT_MAX
-    || val_int < INT_MAX) {
-    return false;
-  }
-  *out = (int)(val_int);
-  return true;
-}
-
 static void safe_mkdir_p(const char **path_component_list) {
   char *target_path = NULL;
   char *copy_target = NULL;
@@ -293,18 +270,17 @@ static bool check_screen_touch(struct output_geometry scr1,
    * including touching at the corners.
    */
 
-  if (scr1.x < 0 || scr1.y < 0 || scr1.width < 0 || scr1.height < 0
-    || scr2.x < 0 || scr2.y < 0 || scr2.width < 0 || scr2.height < 0) {
+  if (scr1.width < 0 || scr1.height < 0 || scr2.width < 0 || scr2.height < 0) {
     return false;
   }
 
-  if (scr1.x > 0) {
+  if (scr1.x > INT32_MIN) {
     scr1.x -= 1;
     scr1.width += 2;
   } else {
     scr1.width += 1;
   }
-  if (scr1.y > 0) {
+  if (scr1.y > INT32_MIN) {
     scr1.y -= 1;
     scr1.height += 2;
   } else {
@@ -330,10 +306,6 @@ static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
   int32_t cur_geom_height = 0;
   int32_t i = 0;
 
-  if (x < 0 || y < 0) {
-    return out_data;
-  }
-
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
     if (!state.output_geometries[i]) {
       continue;
@@ -343,8 +315,7 @@ static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
     cur_geom_y = state.output_geometries[i]->y;
     cur_geom_width = state.output_geometries[i]->width;
     cur_geom_height = state.output_geometries[i]->height;
-    if (cur_geom_x < 0 || cur_geom_y < 0 || cur_geom_width < 0
-      || cur_geom_height < 0) {
+    if (cur_geom_width < 0 || cur_geom_height < 0) {
       continue;
     }
 
@@ -377,15 +348,14 @@ static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
 }
 
 static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
-  int32_t output_idx) {
+  int32_t output_idx, bool *out_is_valid) {
   int32_t cur_geom_x = 0;
   int32_t cur_geom_y = 0;
   int32_t cur_geom_width = 0;
   int32_t cur_geom_height = 0;
-  struct coord out_val = {
-    .x = -1,
-    .y = -1,
-  };
+  struct coord out_val = { .x = 0, .y = 0 };
+
+  *out_is_valid = false;
 
   assert(output_idx >= 0);
   assert(output_idx < MAX_SCREEN_COUNT);
@@ -400,8 +370,7 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
   cur_geom_y = state.output_geometries[output_idx]->y;
   cur_geom_width = state.output_geometries[output_idx]->width;
   cur_geom_height = state.output_geometries[output_idx]->height;
-  if (cur_geom_x < 0 || cur_geom_y < 0 || cur_geom_width < 0
-    || cur_geom_height < 0) {
+  if (cur_geom_width < 0 || cur_geom_height < 0) {
     return out_val;
   }
   if (x >= cur_geom_width || y >= cur_geom_height) {
@@ -410,6 +379,7 @@ static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
 
   out_val.x = cur_geom_x + x;
   out_val.y = cur_geom_y + y;
+  *out_is_valid = true;
   return out_val;
 }
 
@@ -433,10 +403,6 @@ struct coord traverse_line(struct coord start, struct coord end,
   static int32_t max_pos = 0;
   int32_t i = 0;
 
-  assert(start.x >= 0);
-  assert(start.y >= 0);
-  assert(end.x >= 0);
-  assert(end.y >= 0);
   assert(pos >= 0);
 
   /*
@@ -558,6 +524,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
   if (strcmp(interface, wl_compositor_interface.name) == 0) {
     param_state->compositor = wl_registry_bind(registry, name,
       &wl_compositor_interface, 5);
+
   } else if (strcmp(interface, wl_seat_interface.name) == 0) {
     if (!param_state->seat) {
       param_state->seat = wl_registry_bind(
@@ -566,8 +533,10 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
       fprintf(stderr,
         "WARNING: Multiple seats detected, all but first will be ignored.\n");
     }
+
   } else if (strcmp(interface, wl_shm_interface.name) == 0) {
     param_state->shm = wl_registry_bind(registry, name, &wl_shm_interface, 2);
+
   } else if (strcmp(interface, wl_output_interface.name) == 0) {
     bool new_output_assigned = false;
 
@@ -589,18 +558,22 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         MAX_SCREEN_COUNT);
       exit(1);
     }
+
   } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
     param_state->xdg_output_manager = wl_registry_bind(registry, name,
       &zxdg_output_manager_v1_interface, 3);
+
   } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
     if (should_draw_cursor) {
       param_state->layer_shell = wl_registry_bind(registry, name,
         &zwlr_layer_shell_v1_interface, 4);
     }
+
   } else if (strcmp(interface,
     zwlr_virtual_pointer_manager_v1_interface.name) == 0) {
     param_state->virt_pointer_manager = wl_registry_bind(registry, name,
       &zwlr_virtual_pointer_manager_v1_interface, 2);
+
   } else if (strcmp(interface,
     zwp_virtual_keyboard_manager_v1_interface.name) == 0) {
     param_state->virt_kb_manager = wl_registry_bind(registry, name,
@@ -846,6 +819,9 @@ static void xdg_output_handle_logical_size(void *data,
   struct disp_state *param_state = data;
   ssize_t i = 0;
 
+  assert(width >= 0);
+  assert(height >= 0);
+
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
     if (param_state->xdg_outputs[i] == xdg_output) {
       param_state->pending_output_geometries[i]->width = width;
@@ -1030,32 +1006,19 @@ static void wl_buffer_release(__attribute__((unused)) void *data,
 static int open_wl_sock(void) {
   char *wl_sock_path = NULL;
   bool should_free_wl_sock_path = false;
-  char *wayland_socket_env = NULL;
   int wl_sock_fd = 0;
   char *wayland_display_env = NULL;
   bool should_free_wayland_display_env = false;
   struct sockaddr_un wl_sockaddr = { 0 };
   int connect_success = 0;
 
-  wayland_socket_env = getenv("WAYLAND_SOCKET");
-  if (wayland_socket_env != NULL
-    && parse_int(wayland_socket_env, 10, &wl_sock_fd)) {
-    char *sock_check_path = sgenprintf(NULL, "/proc/self/fd/%d", wl_sock_fd);
-    int access_rslt = access(sock_check_path, F_OK);
+  /*
+   * NOTE: This function intentionally does not support the WAYLAND_SOCKET
+   * environment variable, as there is no known plausible use case where it is
+   * necessary.
+   */
 
-    free(sock_check_path);
-    if (access_rslt == 0) {
-      return wl_sock_fd;
-    } else if (access_rslt == -1) {
-      fprintf(stderr,
-        "WARNING: WAYLAND_SOCKET was set to '%s', but the specified fd was not present!\n",
-        wayland_socket_env);
-    } else {
-      assert(false);
-    }
-  }
-
-  wayland_display_env = getenv("WAYLAND_SOCKET");
+  wayland_display_env = getenv("WAYLAND_DISPLAY");
   if (wayland_display_env == NULL) {
     wayland_display_env = safe_strdup("wayland-0");
     should_free_wayland_display_env = true;
@@ -1164,8 +1127,8 @@ static void init_new_display(struct disp_state *param_state,
 
 static void send_pointer_space_data(void) {
   struct coord pointer_space_data = {
-    .x = state.pointer_space_right_edge - state.pointer_space_x,
-    .y = state.pointer_space_bottom_edge - state.pointer_space_y,
+    .x = state.global_space_width,
+    .y = state.global_space_height,
   };
   send_msg_to_peer(CTP_PACKET_POINTER_SPACE_DATA, 1, &pointer_space_data);
 }
@@ -1248,8 +1211,8 @@ static void display_sync_maybe(struct disp_state *param_state) {
 static bool recalc_global_space(struct disp_state *param_state) {
   int32_t ul_corner_x = INT32_MAX;
   int32_t ul_corner_y = INT32_MAX;
-  int32_t br_corner_x = 0;
-  int32_t br_corner_y = 0;
+  int32_t br_corner_x = INT32_MIN;
+  int32_t br_corner_y = INT32_MIN;
   int32_t cur_geom_x = 0;
   int32_t cur_geom_y = 0;
   int32_t cur_geom_width = 0;
@@ -1272,12 +1235,10 @@ static bool recalc_global_space(struct disp_state *param_state) {
     cur_geom_y = param_state->output_geometries[i]->y;
     cur_geom_width = param_state->output_geometries[i]->width;
     cur_geom_height = param_state->output_geometries[i]->height;
-    if (cur_geom_x < 0 || cur_geom_y < 0
-      || cur_geom_width < 0 || cur_geom_height < 0) {
+    if (cur_geom_width < 0 || cur_geom_height < 0) {
       continue;
     }
-    if (cur_geom_x == 0 && cur_geom_y == 0 && cur_geom_width == 0
-      && cur_geom_height == 0) {
+    if (cur_geom_width == 0 && cur_geom_height == 0) {
       /*
        * labwc will send two wl_output::done events for each display, once
        * before we get position/size information from the XDG output protocol,
@@ -1363,8 +1324,6 @@ static bool recalc_global_space(struct disp_state *param_state) {
   param_state->global_space_height = br_corner_y - ul_corner_y;
   param_state->pointer_space_x = ul_corner_x;
   param_state->pointer_space_y = ul_corner_y;
-  param_state->pointer_space_right_edge = br_corner_x;
-  param_state->pointer_space_bottom_edge = br_corner_y;
   return true;
 }
 
@@ -1427,11 +1386,8 @@ static void draw_frame(struct drawable_layer *layer) {
   ssize_t layer_idx = 0;
 
   assert(should_draw_cursor);
-  assert(cursor_x < INT32_MAX && cursor_x > INT32_MIN);
-  assert(cursor_y < INT32_MAX && cursor_y > INT32_MIN);
-  if (cursor_x < 0 || cursor_y < 0) {
-    return;
-  }
+  assert(cursor_x <= INT32_MAX && cursor_x >= INT32_MIN);
+  assert(cursor_y <= INT32_MAX && cursor_y >= INT32_MIN);
 
   if (!layer->layer_surface_configured) {
     return;
@@ -1470,6 +1426,10 @@ static void draw_frame(struct drawable_layer *layer) {
     }
   }
 
+  /*
+   * Unless we run into an absurdly big (billions of pixels in one dimension)
+   * display, this shouldn't crash kloak due to signed integer over/underflow.
+   */
   if (layer->last_drawn_cursor_x >= 0 && layer->last_drawn_cursor_y >= 0) {
     /* Damage the previous cursor location */
     damage_surface_enh(layer->surface,
@@ -1585,17 +1545,22 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   struct coord trav_coord = { 0 };
   struct screen_local_coord trav_scr_coord = { 0 };
 
-  if (!isfinite(*cursor_x_ptr) || !isfinite(*cursor_y_ptr)
-    || *cursor_x_ptr >= INT32_MAX || *cursor_y_ptr >= INT32_MAX) {
+  if (!isfinite(*cursor_x_ptr) || !isfinite(*cursor_y_ptr)) {
     *cursor_x_ptr = prev_cursor_x_pos;
     *cursor_y_ptr = prev_cursor_y_pos;
     return;
   }
-  if (*cursor_x_ptr < 0) {
-    *cursor_x_ptr = 0;
+  if (*cursor_x_ptr < INT32_MIN) {
+    *cursor_x_ptr = INT32_MIN;
   }
-  if (*cursor_y_ptr < 0) {
-    *cursor_y_ptr = 0;
+  if (*cursor_x_ptr > INT32_MAX) {
+    *cursor_x_ptr = INT32_MAX;
+  }
+  if (*cursor_y_ptr < INT32_MIN) {
+    *cursor_y_ptr = INT32_MIN;
+  }
+  if (*cursor_y_ptr > INT32_MAX) {
+    *cursor_y_ptr = INT32_MAX;
   }
   start.x = (int32_t)(prev_cursor_x_pos);
   start.y = (int32_t)(prev_cursor_y_pos);
@@ -1663,7 +1628,14 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
       /*
        * If all of the above fail, we've gone diagonally off a screen and into
        * compositor global space. Move the cursor back to where it was and
-       * stop it.
+       * stop it. Technically we should also be doing this if two different
+       * directions both work to get us back on-screen, but we don't currently
+       * and the one-pixel shift resulting from this likely isn't worth caring
+       * about.
+       *
+       * TODO: Is there a reason to care about this one-pixel shift? Does its
+       * existence leak information an attacker wouldn't be able to get
+       * otherwise?
        */
       end.x = prev_trav_coord.x;
       end.y = prev_trav_coord.y;
@@ -1675,14 +1647,14 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   *(cursor_y_ptr) = end.y;
 }
 
-static struct input_packet * update_virtual_cursor(void) {
+static struct input_packet *update_virtual_cursor(void) {
   struct screen_local_coord prev_scr_coord = { 0 };
   struct screen_local_coord scr_coord = { 0 };
   struct input_packet *old_ev_packet = NULL;
   struct input_packet *ev_packet = NULL;
 
-  assert(prev_cursor_x < INT32_MAX && prev_cursor_x > INT32_MIN);
-  assert(prev_cursor_y < INT32_MAX && prev_cursor_y > INT32_MIN);
+  assert(prev_cursor_x <= INT32_MAX && prev_cursor_x >= INT32_MIN);
+  assert(prev_cursor_y <= INT32_MAX && prev_cursor_y >= INT32_MIN);
 
   prev_scr_coord = abs_coord_to_screen_local_coord((int32_t)(prev_cursor_x),
     (int32_t)(prev_cursor_y));
@@ -1697,14 +1669,17 @@ static struct input_packet * update_virtual_cursor(void) {
       "INFO: Previous cursor position no longer valid, resetting.\n");
     for (int32_t i = 0; i < MAX_SCREEN_COUNT; i++) {
       if (state.layers[i]) {
-        struct coord sane_location = screen_local_coord_to_abs_coord(0, 0, i);
+        bool sane_location_valid = false;
+        struct coord sane_location = screen_local_coord_to_abs_coord(0, 0, i,
+          &sane_location_valid);
 
+        assert(sane_location_valid);
+        assert(sane_location.x <= INT32_MAX && sane_location.x >= INT32_MIN);
+        assert(sane_location.y <= INT32_MAX && sane_location.y >= INT32_MIN);
         prev_cursor_x = sane_location.x;
         prev_cursor_y = sane_location.y;
         cursor_x = sane_location.x;
         cursor_y = sane_location.y;
-        assert(prev_cursor_x < INT32_MAX && prev_cursor_x > INT32_MIN);
-        assert(prev_cursor_y < INT32_MAX && prev_cursor_y > INT32_MIN);
         prev_scr_coord = abs_coord_to_screen_local_coord(
           (int32_t)(prev_cursor_x), (int32_t)(prev_cursor_y));
         if (prev_scr_coord.valid && state.layers[prev_scr_coord.output_idx]) {
@@ -1725,8 +1700,8 @@ static struct input_packet * update_virtual_cursor(void) {
   make_virtual_cursor_pos_sane(prev_cursor_x, prev_cursor_y, &cursor_x,
     &cursor_y);
 
-  assert(isfinite(cursor_x) && cursor_x < INT32_MAX && cursor_x >= 0);
-  assert(isfinite(cursor_y) && cursor_y < INT32_MAX && cursor_y >= 0);
+  assert(isfinite(cursor_x) && cursor_x <= INT32_MAX && cursor_x >= INT32_MIN);
+  assert(isfinite(cursor_y) && cursor_y <= INT32_MAX && cursor_y >= INT32_MIN);
   scr_coord = abs_coord_to_screen_local_coord((int32_t)(cursor_x),
     (int32_t)(cursor_y));
 
@@ -1816,8 +1791,8 @@ static bool process_parent_message(void) {
     assert(isfinite(double_coord_ptr->y));
     prev_cursor_x = cursor_x;
     prev_cursor_y = cursor_y;
-    cursor_x = double_coord_ptr->x;
-    cursor_y = double_coord_ptr->y;
+    cursor_x = double_coord_ptr->x + state.pointer_space_x;
+    cursor_y = double_coord_ptr->y + state.pointer_space_y;
     ev_packet = update_virtual_cursor();
     free(msg_obj);
     if (ev_packet == NULL) {
@@ -1899,10 +1874,8 @@ static void release_scheduled_input_events(void) {
     case KLOAK_PACKET_TYPE_MOUSEMOVE:
       pointer_x = ev_packet->data.coord_data.x - state.pointer_space_x;
       pointer_y = ev_packet->data.coord_data.y - state.pointer_space_y;
-      assert(state.pointer_space_x >= 0);
-      assert(state.pointer_space_y >= 0);
-      if (pointer_x < 0) pointer_x = 0;
-      if (pointer_y < 0) pointer_y = 0;
+      assert(pointer_x >= 0);
+      assert(pointer_y >= 0);
       zwlr_virtual_pointer_v1_motion_absolute(
         state.virt_pointer, (uint32_t)(ev_packet->sched_time),
         (uint32_t)(pointer_x), (uint32_t)(pointer_y),

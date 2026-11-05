@@ -385,8 +385,8 @@ static void detach_input_device(const char *dev_name) {
 }*/
 
 static void li_device_info_unref(struct li_device_info *ldi) {
+  assert(ldi->refcount > 0);
   ldi->refcount -= 1;
-  assert(ldi->refcount != UINT32_MAX);
   if (ldi->refcount == 0) {
     /*
      * The user data for a device is the struct we're freeing, so NULL out the
@@ -589,7 +589,7 @@ static void register_esc_combo_event(struct button_event key_event) {
 }
 
 static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
-  ssize_t *buf_pos_ptr, bool *do_attach_ptr) {
+  ssize_t *buf_pos_ptr, bool *do_attach_ptr, bool *inotify_overflow_ptr) {
   /*
    * Note that this function intentionally does not use assert() to make it
    * easier to test.
@@ -603,6 +603,8 @@ static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
     *buf_pos_ptr = -1;
     return NULL;
   }
+
+  *inotify_overflow_ptr = false;
 
   while (true) {
     if (rem_len < (ssize_t)(sizeof(struct inotify_event))) {
@@ -622,11 +624,17 @@ static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
       return NULL;
     }
     *(buf_pos_ptr) += struct_len;
+    if (ie->mask & IN_Q_OVERFLOW) {
+      *inotify_overflow_ptr = true;
+      return NULL;
+    }
     if (ie->len > 0 && regexec(&evdev_reg, ie->name, 0, NULL, 0) == 0) {
       if (ie->mask & IN_CREATE) {
-        *(do_attach_ptr) = true;
+        *do_attach_ptr = true;
+      } else if (ie->mask & IN_DELETE) {
+        *do_attach_ptr = false;
       } else {
-        *(do_attach_ptr) = false;
+        assert(false);
       }
       return ie->name;
     }
@@ -657,6 +665,7 @@ static void handle_inotify_events(void) {
   ssize_t read_len = 0;
   ssize_t buf_pos = 0;
   bool do_attach = false;
+  bool inotify_overflow = false;
   char *dev_path = NULL;
 
   if (read_buf == NULL) {
@@ -678,8 +687,13 @@ static void handle_inotify_events(void) {
   }
 
   while (buf_pos != read_len) {
-    dev_path = parse_inotify_events(read_buf, read_len, &buf_pos, &do_attach);
+    dev_path = parse_inotify_events(read_buf, read_len, &buf_pos, &do_attach,
+      &inotify_overflow);
     assert(buf_pos != -1);
+    if (inotify_overflow == true) {
+      fprintf(stderr, "FATAL ERROR: inotify queue overflowed!\n");
+      exit(1);
+    }
     if (dev_path == NULL) {
       continue; /* we could use break too in theory */
     }
@@ -884,13 +898,13 @@ static void process_libinput_event(struct libinput_event *li_event) {
       LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
       cursor_coord.y = libinput_event_pointer_get_scroll_value_v120(
         pointer_event, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
-      assert(isfinite(cursor_coord.x));
+      assert(isfinite(cursor_coord.y));
     }
     if (libinput_event_pointer_has_axis(pointer_event,
       LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
       cursor_coord.x = libinput_event_pointer_get_scroll_value_v120(
         pointer_event, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
-      assert(isfinite(cursor_coord.y));
+      assert(isfinite(cursor_coord.x));
     }
     send_msg_to_peer(PTC_PACKET_SCROLL_EVENT, 1, &cursor_coord);
     return;
@@ -910,14 +924,14 @@ static void process_libinput_event(struct libinput_event *li_event) {
       cursor_coord.y = libinput_event_pointer_get_scroll_value(
         pointer_event, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)
         * SCROLL_ANGLE_TO_UNITS_FACTOR_D;
-      assert(isfinite(cursor_coord.x));
+      assert(isfinite(cursor_coord.y));
     }
     if (libinput_event_pointer_has_axis(pointer_event,
       LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
       cursor_coord.x = libinput_event_pointer_get_scroll_value(
         pointer_event, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)
         * SCROLL_ANGLE_TO_UNITS_FACTOR_D;
-      assert(isfinite(cursor_coord.y));
+      assert(isfinite(cursor_coord.x));
     }
     send_msg_to_peer(PTC_PACKET_SCROLL_EVENT, 1, &cursor_coord);
     return;

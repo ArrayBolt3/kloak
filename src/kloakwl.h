@@ -124,6 +124,13 @@ struct drawable_layer {
   /* Sync state */
   bool frame_in_use[MAX_UNRELEASED_FRAMES];
   bool frame_pending;
+  /*
+   * NOTE: In theory, with an absurdly long or tall screen, 31 bits may be
+   * insufficient to store a valid layer size. However, such screens would be
+   * billions of pixels across in one dimension, so this is assumed impossible
+   * for now and will (eventually?) result in a kloak crash on signed integer
+   * over/underflow if such a screen is encountered.
+   */
   int32_t last_drawn_cursor_x;
   int32_t last_drawn_cursor_y;
   int32_t cursor_x_pos_list[MAX_UNRELEASED_FRAMES];
@@ -153,8 +160,6 @@ struct disp_state {
   int32_t global_space_height;
   int32_t pointer_space_x;
   int32_t pointer_space_y;
-  int32_t pointer_space_right_edge;
-  int32_t pointer_space_bottom_edge;
   struct zwlr_layer_shell_v1 *layer_shell;
   struct zwlr_virtual_pointer_manager_v1 *virt_pointer_manager;
   struct zwp_virtual_keyboard_manager_v1 *virt_kb_manager;
@@ -172,11 +177,6 @@ struct disp_state {
 /*******************************/
 /* Utility function prototypes */
 /*******************************/
-
-/*
- * Converts a string to an integer. Returns true on success, false on failure.
- */
-static bool parse_int(const char *val, int base, int *out);
 
 /*
  * Creates a directory and all of its ancestors as needed. Aborts the program
@@ -229,7 +229,7 @@ static struct screen_local_coord abs_coord_to_screen_local_coord(int32_t x,
  * in compositor-global space.
  */
 static struct coord screen_local_coord_to_abs_coord(int32_t x, int32_t y,
-  int32_t output_idx);
+  int32_t output_idx, bool *out_is_valid);
 
 /*
  * Takes two points that define a line on a 2d plane, and outputs the
