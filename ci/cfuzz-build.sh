@@ -25,6 +25,7 @@ set -o pipefail
 set -o errtrace
 shopt -s inherit_errexit
 shopt -s shift_verbose
+export LC_ALL=C
 
 ## Resolve repo root regardless of caller's cwd.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,28 +45,28 @@ if [ -z "${CC:-}" ]; then
   CC="clang"
 fi
 if [ -z "${CFLAGS:-}" ]; then
-  ## TODO: Right now we rely on '-ftrapv' to cause any signed integer overflow
-  ## to crash the kloak process. kloak even goes so far as to use signed
-  ## arithmetic even in places where unsigned arithmetic would be more
-  ## intuitive, just so that it can get overflow protection "for free". We
-  ## can't use '-ftrapv' here though, as that would crash the process being
-  ## fuzzed. Without it, the fuzzer is finding many false positives. Is there
-  ## any easy way to tell the fuzzer to treat signed integer overflow as an
-  ## "immediately abort the current test run and consider it successful"
-  ## condition without crashing the process entirely, or do we need to do the
-  ## (probably very painful) work of explicitly checking for integer overflow
-  ## everywhere it can happen?
-  ##
-  ## Possibly better idea than checking for overflow before calculations;
-  ## code as if '-fwrapv' is being used? That is, do arithmetic that could
-  ## overflow, then check for overflow after the fact. We can then use
-  ## '-ftrapv' in production (crash on overflow), and '-fwrapv' for the
-  ## fuzzer. This is still painful, but not as painful as the alternative.
   CFLAGS="-O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer-no-link,address,undefined"
 fi
 if [ -z "${LIB_FUZZING_ENGINE:-}" ]; then
   LIB_FUZZING_ENGINE="-fsanitize=fuzzer"
 fi
+
+## Signed-overflow policy for the fuzzer differs from production. Production
+## (the Makefile) uses -ftrapv so signed-integer overflow TRAPS: kloak crashes
+## and is restarted rather than running on corrupted state. Under the fuzzer
+## that trap fires on every input that merely wraps an int, drowning real
+## findings in overflow false positives (the realistic envelope is overflow-free,
+## proven by the kloak-tests CBMC suite). So drop that ONE check, keeping the
+## rest of UBSan and ASan:
+##   - -fno-sanitize=signed-integer-overflow removes it whether the check was
+##     requested as the -fsanitize=undefined GROUP (local-dev CFLAGS above) or as
+##     an explicit signed-integer-overflow in the OSS-Fuzz base-builder's CFLAGS.
+##     clang KEEPS an explicitly-listed check under -fwrapv, so -fwrapv alone is
+##     not enough for the CI undefined job -- this is.
+##   - -fwrapv additionally makes signed overflow defined (two's-complement wrap)
+##     so the fuzzed code has well-defined behavior instead of UB.
+## Appended AFTER mode detection so it applies to BOTH entry contexts.
+CFLAGS="${CFLAGS} -fwrapv -fno-sanitize=signed-integer-overflow"
 
 ## --- Wayland protocol codegen ---------------------------------------
 ##
@@ -99,13 +100,13 @@ done
 ## wayland-client, xkbcommon - the same set kloak's main Makefile
 ## consumes.
 
-PKG_LIBS="libinput libevdev wayland-client xkbcommon"
-PKG_CFLAGS_VALUE="$(pkg-config --cflags ${PKG_LIBS})"
-PKG_LIBS_VALUE="$(pkg-config --libs ${PKG_LIBS})"
+PKG_LIBS=(libinput libevdev wayland-client xkbcommon)
+PKG_CFLAGS_VALUE="$(pkg-config --cflags "${PKG_LIBS[@]}")"
+PKG_LIBS_VALUE="$(pkg-config --libs "${PKG_LIBS[@]}")"
 
 for harness in fuzz/fuzz_*.c; do
   name="$(basename -- "${harness}" .c)"
-  printf 'building %s\n' "${name}"
+  printf '%s\n' "building ${name}"
 
   # shellcheck disable=SC2086
   ${CC} ${CFLAGS} \
@@ -118,5 +119,5 @@ for harness in fuzz/fuzz_*.c; do
     -lm -lrt \
     ${PKG_LIBS_VALUE}
 
-  printf 'compiled %s -> %s\n' "${name}" "${OUT}/${name}"
+  printf '%s\n' "compiled ${name} -> ${OUT}/${name}"
 done

@@ -24,6 +24,7 @@ set -o pipefail
 set -o errtrace
 shopt -s inherit_errexit
 shopt -s shift_verbose
+export LC_ALL=C
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
@@ -42,19 +43,19 @@ for binary in out/fuzz_*; do
     continue
   fi
   name="$(basename -- "${binary}")"
-  printf '\n=== %s (%ss budget) ===\n' "${name}" "${FUZZ_SECONDS}"
+  printf '%s\n' "" "=== ${name} (${FUZZ_SECONDS}s budget) ==="
   if ! "${binary}" \
        -max_total_time="${FUZZ_SECONDS}" \
        -max_len="${FUZZ_MAX_LEN}" \
        -print_final_stats=1 ; then
-    printf '%s: FAILED\n' "${name}" >&2
+    printf '%s\n' "${name}: FAILED" >&2
     failed=$((failed + 1))
   fi
 done
 
 if [ "${failed}" -gt 0 ]; then
-  printf '\n%d harness(es) failed.\n' "${failed}" >&2
+  printf '%s\n' "" "${failed} harness(es) failed." >&2
   exit 1
 fi
 
-printf '\nall harnesses passed.\n'
+printf '%s\n' "" "all harnesses passed."

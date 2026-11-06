@@ -512,6 +512,10 @@ static void parse_esc_key_str(const char *esc_key_str) {
   size_t i = 0;
   size_t j = 0;
 
+  /*
+   * -k can only be passed once, so it's fine to assume esc_key_list and
+   * related vars are unpopulated at this point.
+   */
   for (i = 0; ((root_token = strsep(&esc_key_str_copy, ",")) != NULL); i++) {
     if (root_token[0] == '\0' ) {
       fprintf(stderr,
@@ -636,7 +640,13 @@ static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
       } else if (ie->mask & IN_DELETE) {
         *do_attach_ptr = false;
       } else {
-        assert(false);
+        /*
+         * We explicitly configure the kernel to only return IN_CREATE and
+         * IN_DELETE events, so anything else indicates a serious problem that
+         * we should not continue past.
+         */
+        *buf_pos_ptr = -1;
+        return NULL;
       }
       return ie->name;
     }
@@ -1292,6 +1302,7 @@ static void parse_cli_args(int argc, char **argv) {
 /**********/
 /**********/
 
+#ifndef KLOAK_FUZZING
 int main(int argc, char **argv) {
   const char *env_val = NULL;
   int poll_ret = 0;
@@ -1389,3 +1400,4 @@ int main(int argc, char **argv) {
 
   assert(false);
 }
+#endif /* KLOAK_FUZZING */

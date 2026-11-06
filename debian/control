@@ -8,6 +8,7 @@ Maintainer: Patrick Schleizer <adrelanos@whonix.org>
 Build-Depends: debhelper (>= 13.11.4),
  debhelper-compat (= 13),
  dh-apparmor,
+ libcap-dev,
  libevdev-dev,
  libinput-dev,
  libwayland-dev,

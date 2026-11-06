@@ -190,7 +190,7 @@ struct disp_state {
 /*
  * Creates a directory and all of its ancestors as needed. Aborts the program
  * if this fails. path_component_list must be an absolute path consisting of
- * one or more '/'-prefixed items, and must be terminated by a '0' item.
+ * one or more '/'-prefixed items, and must be terminated by a NULL item.
  */
 static void safe_mkdir_p(const char **path_component_list);
 

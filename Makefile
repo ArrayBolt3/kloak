@@ -140,3 +140,4 @@ install : all etc/apparmor.d/usr.bin.kloak $(MANPAGES)
 	$(INSTALL) -m 755 kloakwl $(DESTDIR)$(bindir)
 	$(INSTALL) -m 644 $(MANPAGES) $(DESTDIR)$(mandir)/man8
 	$(INSTALL) -m 644 etc/apparmor.d/usr.bin.kloak $(DESTDIR)$(apparmor_dir)
+	$(INSTALL) -m 644 etc/apparmor.d/usr.bin.kloakwl $(DESTDIR)$(apparmor_dir)

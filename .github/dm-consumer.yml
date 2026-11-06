@@ -13,7 +13,7 @@
 ## https://github.com/org-ai-assisted/developer-meta-files/blob/master/agents/github-actions-consumer-templates.md
 
 coverity:
-  apt-packages:    "libevdev-dev libinput-dev libwayland-dev libxkbcommon-dev pkg-config"
+  apt-packages:    "libevdev-dev libinput-dev libwayland-dev libxkbcommon-dev libcap-dev pkg-config"
   build-command:   "./cov-analysis/bin/cov-build --dir cov-int make"
   ## scan.coverity.com project name. Verified at
   ## https://scan.coverity.com/projects/org-ai-assisted-kloak
@@ -32,4 +32,4 @@ dist-ai-tests:
   ## seam. cbmc proves the invariants; gcc + the wayland/libinput/libevdev/
   ## xkbcommon dev headers + wayland-scanner (libwayland-bin) compile and link
   ## the harness exactly as kloak builds; pkg-config locates them.
-  apt-packages: "python3 cbmc gcc libc6-dev libwayland-bin libwayland-dev libinput-dev libevdev-dev libxkbcommon-dev pkg-config"
+  apt-packages: "python3 cbmc gcc clang libclang-rt-dev libc6-dev libwayland-bin libwayland-dev libinput-dev libevdev-dev libxkbcommon-dev libcap-dev pkg-config"

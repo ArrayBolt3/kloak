@@ -392,7 +392,7 @@ static void init_msg_ring(void) {
   int page_size = getpagesize();
   int memfd = 0;
 
-  parse_ring_length = page_size * (PARSE_RING_LEN / page_size);
+  parse_ring_length = (ssize_t)(page_size) * (PARSE_RING_LEN / page_size);
   if (parse_ring_length < PARSE_RING_LEN) {
     parse_ring_length += page_size;
   }

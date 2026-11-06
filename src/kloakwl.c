@@ -650,6 +650,11 @@ static void kb_handle_keymap(void *data,
 
   assert(size <= INT32_MAX);
 
+  /*
+   * The compositor-provided size argument is trusted, the worst that could
+   * happen is we could crash if the file's size is shorter than the mapping
+   * size.
+   */
   kb_map_shm = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
   if (kb_map_shm == MAP_FAILED) {
     fprintf(stderr, "FATAL ERROR: Could not mmap xkb layout!\n");
@@ -1069,7 +1074,7 @@ static int open_wl_sock(void) {
     exit(1);
   }
   wl_sockaddr.sun_family = AF_UNIX;
-  strcpy(wl_sockaddr.sun_path, wl_sock_path);
+  strncpy(wl_sockaddr.sun_path, wl_sock_path, sizeof(wl_sockaddr.sun_path) - 1);
 
   connect_success = connect(wl_sock_fd,
     (const struct sockaddr *)(&wl_sockaddr), sizeof(wl_sockaddr));
@@ -2502,6 +2507,7 @@ static void applayer_poll_init(void) {
 /**********/
 /**********/
 
+#ifndef KLOAK_FUZZING
 int main(int argc, char **argv) {
   int poll_ret = 0;
 
@@ -2599,3 +2605,4 @@ int main(int argc, char **argv) {
 
   assert(false);
 }
+#endif /* KLOAK_FUZZING */
