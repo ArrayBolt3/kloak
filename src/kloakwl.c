@@ -1653,6 +1653,48 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   *(cursor_y_ptr) = end.y;
 }
 
+static struct input_packet *find_merge_target_packet(
+  enum input_packet_type target_packet_type,
+  const enum input_packet_type *ignore_packet_type_list) {
+  struct input_packet *found_packet = NULL;
+
+  /*
+   * TAILQ_FOREACH_REVERSE would be useful here, but it is not documented to be
+   * implemented using a loop, therefore it may be unsafe to use 'break;'
+   * statements within it. We implement a loop manually for this reason.
+   */
+
+  found_packet = TAILQ_LAST(&evq_head, tailhead_evq);
+
+  while (found_packet != NULL) {
+    bool do_ignore_packet = false;
+
+    if (found_packet->packet_type == target_packet_type) {
+      break;
+    }
+
+    for (ssize_t i = 0; ; i++) {
+      enum input_packet_type ignore_packet_type = ignore_packet_type_list[i];
+      if (ignore_packet_type == 0) {
+        break;
+      }
+      if (found_packet->packet_type == ignore_packet_type) {
+        do_ignore_packet = true;
+        break;
+      }
+    }
+
+    if (!do_ignore_packet) {
+      found_packet = NULL;
+      break;
+    }
+
+    found_packet = TAILQ_PREV(found_packet, tailhead_evq, evq_entries);
+  }
+
+  return found_packet;
+}
+
 static struct input_packet *update_virtual_cursor(void) {
   struct screen_local_coord prev_scr_coord = { 0 };
   struct screen_local_coord scr_coord = { 0 };
@@ -1720,9 +1762,11 @@ static struct input_packet *update_virtual_cursor(void) {
     state.layers[scr_coord.output_idx]->frame_pending = true;
   }
 
-  /* = rather than == is intentional here */
-  if ((old_ev_packet = TAILQ_LAST(&evq_head, tailhead_evq))
-    && (old_ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSEMOVE)) {
+  old_ev_packet = find_merge_target_packet(
+    KLOAK_PACKET_TYPE_MOUSEMOVE,
+    (const enum input_packet_type[]){KLOAK_PACKET_TYPE_MOUSESCROLL, 0}
+  );
+  if (old_ev_packet != NULL) {
     old_ev_packet->data.coord_data.x = (int32_t)(cursor_x);
     old_ev_packet->data.coord_data.y = (int32_t)(cursor_y);
     return NULL;
@@ -1743,8 +1787,11 @@ static struct input_packet *update_mouse_scroll(void) {
   struct input_packet *ev_packet = NULL;
 
   if ((vert_scroll_ticks != 0) || (horiz_scroll_ticks != 0)) {
-    if ((old_ev_packet = TAILQ_LAST(&evq_head, tailhead_evq))
-      && (old_ev_packet->packet_type == KLOAK_PACKET_TYPE_MOUSESCROLL)) {
+    old_ev_packet = find_merge_target_packet(
+      KLOAK_PACKET_TYPE_MOUSESCROLL,
+      (const enum input_packet_type[]){KLOAK_PACKET_TYPE_MOUSEMOVE, 0}
+    );
+    if (old_ev_packet != NULL) {
       old_ev_packet->data.coord_data.y += vert_scroll_ticks;
       old_ev_packet->data.coord_data.x += horiz_scroll_ticks;
       return NULL;

@@ -190,7 +190,7 @@ struct disp_state {
 /*
  * Creates a directory and all of its ancestors as needed. Aborts the program
  * if this fails. path_component_list must be an absolute path consisting of
- * one or more '/'-prefixed items, and must be terminated by a NULL item.
+ * one or more '/'-prefixed items, and must be terminated by a '0' item.
  */
 static void safe_mkdir_p(const char **path_component_list);
 
@@ -399,6 +399,16 @@ static int calc_poll_timeout(void);
  */
 static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   double prev_cursor_y_pos, double *cursor_x_ptr, double *cursor_y_ptr);
+
+/*
+ * Finds an input packet that new input information should be merged into, by
+ * searching backwards through the event queue, ignoring packet types in the
+ * ignore list. Returns NULL if no candidate is found. ignore_packet_type_list
+ * must be terminated by a NULL.
+ */
+static struct input_packet *find_merge_target_packet(
+  enum input_packet_type target_packet_type,
+  const enum input_packet_type *ignore_packet_type_list);
 
 /*
  * Updates the virtual cursor's position based on the global cursor_x and
