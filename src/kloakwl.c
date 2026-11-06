@@ -2496,7 +2496,7 @@ int main(int argc, char **argv) {
     }
     wl_display_flush_safe(state.display);
 
-    if (ev_fds[0].revents & POLLIN) {
+    if (ev_fds[0].revents & POLLIN || parse_ring_data_len > 0) {
       for (int8_t i = 0; i < MAX_PARENT_BATCH_MESSAGES; i++) {
         if (!process_parent_message()) {
           break;

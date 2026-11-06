@@ -1377,7 +1377,7 @@ int main(int argc, char **argv) {
     ev_fds[1].revents = 0;
 
     if (wl_connect_success) {
-      if (ev_fds[2].revents & POLLIN) {
+      if (ev_fds[2].revents & POLLIN || parse_ring_data_len > 0) {
         process_child_message();
       }
       if (ev_fds[2].revents & POLLHUP) {
