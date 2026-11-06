@@ -37,26 +37,29 @@ ExecStart=/usr/bin/kloak
 Restart=always
 RestartSec=2s
 
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_TTY_CONFIG CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_SETUID CAP_SETGID
 
 ProtectSystem=strict
-#ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 ## hardened kernels without CONFIG_USER_NS_UNPRIVILEGED=Y
 ## need to:
-## * disable or comment out the 3 'Private' namespaces below
+## * disable or comment out the two 'Private' namespaces below
 ## $ systemctl edit --full kloak
 PrivateTmp=true
-#PrivateUsers=true
 PrivateNetwork=true
 MemoryDenyWriteExecute=true
-NoNewPrivileges=true
 RestrictRealtime=true
-RestrictNamespaces=true
 SystemCallArchitectures=native
-SystemCallFilter=brk open poll close ioctl mmap munmap read pread64 getdents64 socket connect getsockopt epoll_create1 epoll_ctl rt_sigprocmask epoll_wait inotify_init1 access openat fstat prctl sendmsg recvmsg newfstatat unlink ftruncate fcntl timerfd_create statx readlinkat faccessat2 fstatfs inotify_add_watch timerfd_settime madvise sigaltstack rt_sigaction
+SystemCallFilter=brk open poll close ioctl mmap munmap read pread64 getdents64 socket connect getsockopt epoll_create1 epoll_ctl rt_sigprocmask epoll_wait inotify_init1 access openat fstat prctl sendmsg recvmsg newfstatat unlink ftruncate fcntl timerfd_create statx readlinkat faccessat2 fstatfs inotify_add_watch timerfd_settime madvise sigaltstack rt_sigaction pipe2 memfd_create clone wait4 dup2 close_range lseek setgroups setresuid setresgid unshare mount pivot_root capget capset umount2 chdir mkdir
+
+## The following settings do not work:
+#ProtectHome=true ## Prevents Wayland socket access
+#PrivateUsers=true ## Prevents Wayland socket access
+#RestrictNamespaces=true ## Breaks self-sandboxing
+#NoNewPrivileges=true ## Prevents launching the Wayland adapter, kloak sets
+                      ## this flag itself once it can
 
 [Install]
 WantedBy=graphical.target

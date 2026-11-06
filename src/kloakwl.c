@@ -1906,9 +1906,19 @@ static void release_scheduled_input_events(void) {
           (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
           wl_fixed_from_int(ev_packet->data.coord_data.y
             * SCROLL_ANGLE_PER_TICK));
+        /*
+         * wlroots (or labwc?) apparently wants a double-negative for scrolling
+         * up or left. If 'value' is always positive and 'discrete' is allowed
+         * to be negative, most apps behave properly but Meld will only scroll
+         * down and right. If 'value' is allowed to be negative and 'discrete'
+         * is always positive, Qt apps will only scroll down. When both are
+         * allowed to be negative, scrolling works correctly.
+         */
         zwlr_virtual_pointer_v1_axis_discrete(state.virt_pointer,
           (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_VERTICAL_SCROLL,
-          wl_fixed_from_int(SCROLL_ANGLE_PER_TICK),
+          ev_packet->data.coord_data.y >= 0
+            ? wl_fixed_from_int(SCROLL_ANGLE_PER_TICK)
+            : wl_fixed_from_int(-SCROLL_ANGLE_PER_TICK),
           ev_packet->data.coord_data.y);
         send_axis_source_and_frame = true;
       }
@@ -1919,8 +1929,10 @@ static void release_scheduled_input_events(void) {
             * SCROLL_ANGLE_PER_TICK));
         zwlr_virtual_pointer_v1_axis_discrete(state.virt_pointer,
           (uint32_t)(ev_packet->sched_time), WL_POINTER_AXIS_HORIZONTAL_SCROLL,
-          wl_fixed_from_int(SCROLL_ANGLE_PER_TICK),
-            ev_packet->data.coord_data.x);
+          ev_packet->data.coord_data.x >= 0
+            ? wl_fixed_from_int(SCROLL_ANGLE_PER_TICK)
+            : wl_fixed_from_int(-SCROLL_ANGLE_PER_TICK),
+          ev_packet->data.coord_data.x);
         send_axis_source_and_frame = true;
       }
       if (send_axis_source_and_frame) {
@@ -2237,8 +2249,8 @@ static void applayer_sandbox_init(void) {
 
   /* Bind-mount XKB data into the sandbox filesystem. */
   safe_mkdir_p(xkb_path_component_list);
-  if (mount("/usr/share/X11/xkb", "/tmp/usr/share/X11/xkb", "", MS_BIND,
-    NULL) == -1) {
+  if (mount("/usr/share/X11/xkb", "/tmp/usr/share/X11/xkb", "",
+    MS_BIND | MS_RDONLY, NULL) == -1) {
     fprintf(stderr,
       "FATAL ERROR: Could not bind-mount XKB data into sandbox: %s\n",
       strerror(errno));

@@ -8,12 +8,10 @@
 /*********************************/
 
 /*
- * Absolute path to the kloakwl executable.
- *
- * TODO: Make this somehow dependent on the prefix kloak is installed into, so
- * as to not break installation into locations other than /usr/bin.
+ * Absolute path to the kloakwl executable. 'make' will set this to a 'kloakwl'
+ * executable under the installation binary prefix.
  */
-#define KLOAKWL_PATH "/usr/bin/kloakwl"
+#define KLOAKWL_PATH "@KLOAKWL_PATH@"
 /* Number of fds watched by the main loop poll. */
 #define POLL_FD_COUNT 3
 /*

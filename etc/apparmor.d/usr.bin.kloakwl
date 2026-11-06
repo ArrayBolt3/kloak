@@ -1,0 +1,51 @@
+# Last Modified: Thu Nov 5 19:26:10 2026
+include <tunables/global>
+
+## Copyright (C) 2026 - 2026 ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+## See the file COPYING for copying conditions.
+
+/usr/bin/kloakwl {
+  include <local/usr.bin.kloakwl>
+
+  network unix stream,
+
+  signal receive set=cont peer=unconfined,
+  signal receive set=exists peer=unconfined,
+  signal receive set=kill peer=unconfined,
+  signal receive set=term peer=unconfined,
+
+  capability dac_override,
+  deny capability dac_read_search,
+  capability setuid,
+  capability setgid,
+  ## This gets denied even in the sandbox if not permitted.
+  capability sys_admin,
+
+  userns create,
+
+  mount options=rprivate /,
+  mount fstype=tmpfs options=(rw,nosuid,nodev,noexec,nosymfollow) newroot -> /tmp/,
+  mount options=(ro,bind) /usr/share/X11/xkb/ -> /tmp/usr/share/X11/xkb/,
+  remount options=ro /tmp/,
+
+  pivot_root oldroot=/tmp/ /tmp/,
+
+  ## This is called after pivoting into /tmp.
+  umount /,
+
+  /etc/ld.so.cache r,
+  /etc/ld.so.preload r,
+  /usr/bin/kloakwl mr,
+  /{,usr/}lib{,32,64}/** mr,
+
+  @{PROC}/@{pid}/{uid_map,gid_map,setgroups} rw,
+  /tmp/ rw,
+  /tmp/usr/ rw,
+  /tmp/usr/** rw,
+  /etc/nsswitch.conf r,
+  /etc/passwd r,
+  /etc/group r,
+
+  /dev/urandom r,
+  /run/user/*/wayland-* r,
+}

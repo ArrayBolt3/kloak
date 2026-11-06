@@ -20,5 +20,6 @@ override_dh_installchangelogs:
 
 override_dh_install:
 	dh_apparmor --profile-name=usr.bin.kloak
+	dh_apparmor --profile-name=usr.bin.kloakwl
 	dh_apparmor --profile-name=usr.libexec.kloak.find_wl_compositor
 	dh_install

@@ -120,19 +120,23 @@ src/virtual-keyboard.h : protocol/virtual-keyboard-unstable-v1.xml
 src/virtual-keyboard.c : protocol/virtual-keyboard-unstable-v1.xml
 	wayland-scanner private-code < protocol/virtual-keyboard-unstable-v1.xml > src/virtual-keyboard.c
 
-#MANPAGES := auto-generated-man-pages/kloak.8
+src/kloak.h : src/kloak.h.in
+	sed 's#@KLOAKWL_PATH@#${bindir}/kloakwl#g' src/kloak.h.in > src/kloak.h
 
-#man : $(MANPAGES)
+MANPAGES := auto-generated-man-pages/kloak.8
 
-#auto-generated-man-pages/% : man/%.ronn
-#	ronn --manual="kloak Manual" --organization="kloak" <$< >$@
+man : $(MANPAGES)
+
+auto-generated-man-pages/% : man/%.ronn
+	ronn --manual="kloak Manual" --organization="kloak" <$< >$@
 
 clean :
 	rm -f kloak kloakwl
-	rm -f src/xdg-shell-protocol.h src/xdg-shell-protocol.c src/xdg-output-protocol.h src/xdg-output-protocol.c src/wlr-layer-shell.h src/wlr-layer-shell.c src/wlr-virtual-pointer.h src/wlr-virtual-pointer.c src/virtual-keyboard.h src/virtual-keyboard.c
+	rm -f src/xdg-shell-protocol.h src/xdg-shell-protocol.c src/xdg-output-protocol.h src/xdg-output-protocol.c src/wlr-layer-shell.h src/wlr-layer-shell.c src/wlr-virtual-pointer.h src/wlr-virtual-pointer.c src/virtual-keyboard.h src/virtual-keyboard.c src/kloak.h
 
-#install : all etc/apparmor.d/usr.bin.kloak $(MANPAGES)
-#	$(INSTALL) -d -m 755 $(addprefix $(DESTDIR), $(bindir) $(mandir)/man8 $(apparmor_dir))
-#	$(INSTALL) -m 755 kloak $(DESTDIR)$(bindir)
-#	$(INSTALL) -m 644 $(MANPAGES) $(DESTDIR)$(mandir)/man8
-#	$(INSTALL) -m 644 etc/apparmor.d/usr.bin.kloak $(DESTDIR)$(apparmor_dir)
+install : all etc/apparmor.d/usr.bin.kloak $(MANPAGES)
+	$(INSTALL) -d -m 755 $(addprefix $(DESTDIR), $(bindir) $(mandir)/man8 $(apparmor_dir))
+	$(INSTALL) -m 755 kloak $(DESTDIR)$(bindir)
+	$(INSTALL) -m 755 kloakwl $(DESTDIR)$(bindir)
+	$(INSTALL) -m 644 $(MANPAGES) $(DESTDIR)$(mandir)/man8
+	$(INSTALL) -m 644 etc/apparmor.d/usr.bin.kloak $(DESTDIR)$(apparmor_dir)
