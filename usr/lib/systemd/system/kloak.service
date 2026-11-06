@@ -49,17 +49,21 @@ ProtectControlGroups=true
 ## $ systemctl edit --full kloak
 PrivateTmp=true
 PrivateNetwork=true
+## The privileged component of kloak cannot bypass MemoryDenyWriteExecute=true
+## as it does not have executable mmap privileges for any files outside of
+## /usr/lib with our AppArmor profile, and cannot use memfd_create. The
+## unprivileged component of kloak is in a similar situation, but it also can't
+## see any filesystems that aren't mounted noexec, which is even better.
 MemoryDenyWriteExecute=true
 RestrictRealtime=true
 SystemCallArchitectures=native
-SystemCallFilter=@system-service @mount
+SystemCallFilter=@system-service @mount ~memfd_create
 
 ## The following settings do not work:
 #ProtectHome=true ## Prevents Wayland socket access
 #PrivateUsers=true ## Prevents Wayland socket access
 #RestrictNamespaces=true ## Breaks self-sandboxing
-#NoNewPrivileges=true ## Prevents launching the Wayland adapter, kloak sets
-                      ## this flag itself once it can
+#NoNewPrivileges=true ## Prevents launching the Wayland adapter
 
 [Install]
 WantedBy=graphical.target

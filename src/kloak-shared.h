@@ -13,6 +13,18 @@
 #error "Neither KLOAK nor KLOAKWL are defined."
 #endif
 
+/*********************************/
+/* Static defines, do not change */
+/*********************************/
+
+/* File descriptor number for /dev/urandom. */
+#define FD_URANDOM 3
+
+/* Self-explanatory. */
+#define ALPHABET_LEN 26
+#define ASCII_UPPERCASE_START 65
+#define ASCII_LOWERCASE_START 97
+
 /*******************/
 /* Tunable defines */
 /*******************/
@@ -131,6 +143,18 @@ static void safe_close(int fd);
 static void move_fd(int orig_fd, int new_fd);
 
 /*
+ * Opens /dev/urandom and moves its fd to FD_URANDOM. Must be called before
+ * any other files are opened.
+ */
+static void init_fd_urandom(void);
+
+/*
+ * Reads the specified number of random bytes from /dev/urandom into the
+ * specified buffer.
+ */
+static void read_random(char *buf, ssize_t len);
+
+/*
  * Creates a freshly allocated string from the printf template and arguments
  * provided.
  */
@@ -146,10 +170,16 @@ static char *sgenprintf(int *out_len_ptr, const char *str, ...);
 static ssize_t write_all(int fd, const void *buf, size_t count);
 
 /*
- * Creates a memfd file of the specified size. Aborts the program if this
+ * Fills in the specified number of bytes in the provided buffer with random
+ * characters in the range [A-Za-z].
+ */
+static void fill_with_rand_alphabetic(char *buf, ssize_t len);
+
+/*
+ * Creates a shm file of the specified size. Aborts the program if this
  * fails.
  */
-static int create_memfd_file(ssize_t size);
+static int allocate_shm(ssize_t size);
 
 /****************************************/
 /* Message handling vars and prototypes */
@@ -267,6 +297,17 @@ static int safe_open(const char *pathname, int flags) {
   return out_int;
 }
 
+static void read_random(char *buf, ssize_t len) {
+  assert(len >= 0);
+  assert(buf != NULL);
+
+  if (read(FD_URANDOM, buf, (size_t)(len)) < len) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not read %ld byte(s) from /dev/urandom!\n", len);
+    exit(1);
+  }
+}
+
 static void safe_close(int fd) {
   int rslt = close(fd);
   if (rslt == -1) {
@@ -299,6 +340,18 @@ static void move_fd(int orig_fd, int new_fd) {
     exit(1);
   }
 }
+
+/*
+ * FD_URANDOM is intentionally hardcoded and never closed. See fd
+ * definitions in kloakwl.h for more info.
+ */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wanalyzer-fd-leak"
+static void init_fd_urandom(void) {
+  int randfd = safe_open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+  move_fd(randfd, FD_URANDOM);
+}
+#pragma GCC diagnostic pop
 
 /*
  * GCC issues a false-positive warning if the rslt_len check catches a -1
@@ -365,19 +418,87 @@ static ssize_t write_all(int fd, const void *buf, size_t count) {
   return (ssize_t)(count);
 }
 
-static int create_memfd_file(ssize_t size) {
-  int memfd = memfd_create("", MFD_CLOEXEC);
-  if (memfd == -1) {
-    fprintf(stderr, "FATAL ERROR: Could not allocate memfd file: %s\n",
+static void fill_with_rand_alphabetic(char *buf, ssize_t len) {
+  char randchar = 0;
+
+  assert(len >= 0);
+  assert(buf != NULL);
+
+  for (ssize_t i = 0; i < len; i++) {
+    do {
+      read_random(&randchar, 1);
+      if (randchar == CHAR_MIN) {
+        randchar = 0;
+      } else {
+        randchar = (char)(abs(randchar));
+      }
+    } while (randchar >= (CHAR_MAX - (CHAR_MAX % ALPHABET_LEN)));
+
+    randchar %= (ALPHABET_LEN * 2);
+    if (randchar < ALPHABET_LEN) {
+      randchar += ASCII_UPPERCASE_START;
+    } else {
+      randchar += (ASCII_LOWERCASE_START - ALPHABET_LEN);
+    }
+    buf[i] = randchar;
+  }
+}
+
+static int allocate_shm(ssize_t size) {
+  int32_t retries = 100;
+  int fd = -1;
+  /* 18 = length of string '/kloak-XXXXXXXXXX' + NULL terminator */
+  char name[18];
+  int snprintf_len = 0;
+  int32_t ret = 0;
+
+  assert(size >= 0);
+  /*
+   * In a perfect world, we'd do the sizeof check here at compile time, but
+   * unfortunately that isn't possible.
+   */
+  if (sizeof(off_t) == 4) {
+    assert(size <= INT32_MAX);
+  } else if (sizeof(off_t) == 8) {
+    assert(size <= INT64_MAX);
+  } else {
+    fprintf(stderr,
+      "FATAL ERROR: off_t is not 32-bit or 64-bit, cannot continue\n");
+    exit(1);
+  }
+
+  do {
+    snprintf_len = snprintf(name, sizeof(name), "%s", "/kloak-XXXXXXXXXX");
+    assert(snprintf_len > 0 && (size_t)(snprintf_len) == sizeof(name) - 1);
+    /* 10 = length of 'XXXXXXXXXX', 11 = length + NULL terminator */
+    fill_with_rand_alphabetic(name + sizeof(name) - 11, 10);
+    --retries;
+    fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd >= 0) {
+      shm_unlink(name);
+      break;
+    }
+  } while (retries > 0 && errno == EEXIST);
+
+  if (fd == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not create shared memory fd: %s\n",
       strerror(errno));
     exit(1);
   }
-  if (ftruncate(memfd, size) == -1) {
-    fprintf(stderr, "FATAL ERROR: Could not grow memfd file: %s\n",
+
+  do {
+    ret = ftruncate(fd, (off_t)(size));
+  } while (ret < 0 && errno == EINTR);
+  if (ret < 0) {
+    close(fd);
+    fprintf(stderr,
+      "FATAL ERROR: Could not allocate shared memory block: %s\n",
       strerror(errno));
     exit(1);
   }
-  return memfd;
+
+  return fd;
 }
 
 /*********************************************/
@@ -390,14 +511,14 @@ static int create_memfd_file(ssize_t size) {
  */
 static void init_msg_ring(void) {
   int page_size = getpagesize();
-  int memfd = 0;
+  int shm_fd = 0;
 
   parse_ring_length = (ssize_t)(page_size) * (PARSE_RING_LEN / page_size);
   if (parse_ring_length < PARSE_RING_LEN) {
     parse_ring_length += page_size;
   }
 
-  memfd = create_memfd_file(parse_ring_length);
+  shm_fd = allocate_shm(parse_ring_length);
 
   parse_ring_block = mmap(NULL, 2 * (size_t)(parse_ring_length), PROT_NONE,
     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -409,7 +530,7 @@ static void init_msg_ring(void) {
   }
 
   if (mmap(parse_ring_block, (size_t)(parse_ring_length),
-    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, memfd, 0) == MAP_FAILED) {
+    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, shm_fd, 0) == MAP_FAILED) {
     fprintf(stderr,
       "FATAL ERROR: Could not map parse ring to first address: %s\n",
       strerror(errno));
@@ -417,14 +538,14 @@ static void init_msg_ring(void) {
   }
 
   if (mmap(parse_ring_block + parse_ring_length, (size_t)(parse_ring_length),
-    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, memfd, 0) == MAP_FAILED) {
+    PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, shm_fd, 0) == MAP_FAILED) {
     fprintf(stderr,
       "FATAL ERROR: Could not map parse ring to second address: %s\n",
       strerror(errno));
     exit(1);
   }
 
-  safe_close(memfd);
+  safe_close(shm_fd);
 }
 
 #if defined(KLOAK)

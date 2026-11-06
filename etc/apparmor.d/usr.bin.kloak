@@ -19,6 +19,8 @@ include <tunables/global>
   /{,usr/}lib{,32,64}/** mr,
   /dev/input/ r,
   /dev/input/event* rw,
+  /dev/shm/* rw,
+  /dev/urandom r,
 
   ## libinput needs these.
   /sys/devices/**/uevent r,

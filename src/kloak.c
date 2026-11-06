@@ -33,6 +33,7 @@
 #include <math.h>
 #include <linux/prctl.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 
 #include <libinput.h>
 #include <libevdev/libevdev.h>
@@ -1347,6 +1348,7 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
+  init_fd_urandom();
   applayer_regex_init();
   applayer_kloakwl_init();
   applayer_inotify_init();

@@ -26,7 +26,6 @@ include <tunables/global>
   mount options=rprivate /,
   mount fstype=tmpfs options=(rw,nosuid,nodev,noexec,nosymfollow) newroot -> /tmp/,
   mount options=(ro,bind) /usr/share/X11/xkb/ -> /tmp/usr/share/X11/xkb/,
-  remount options=ro /tmp/,
 
   pivot_root oldroot=/tmp/ /tmp/,
 
@@ -40,12 +39,12 @@ include <tunables/global>
 
   @{PROC}/@{pid}/{uid_map,gid_map,setgroups} rw,
   /tmp/ rw,
-  /tmp/usr/ rw,
-  /tmp/usr/** rw,
+  /tmp/** rw,
   /etc/nsswitch.conf r,
   /etc/passwd r,
   /etc/group r,
 
   /dev/urandom r,
+  /dev/shm/* rw,
   /run/user/*/wayland-* r,
 }

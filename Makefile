@@ -82,13 +82,13 @@ all : kloak kloakwl
 
 kloakwl : src/kloakwl.c src/kloakwl.h src/kloak-shared.h src/xdg-shell-protocol.h src/xdg-shell-protocol.c src/xdg-output-protocol.h src/xdg-output-protocol.c src/wlr-layer-shell.c src/wlr-layer-shell.h src/wlr-virtual-pointer.c src/wlr-virtual-pointer.h src/virtual-keyboard.c src/virtual-keyboard.h
 	## Comment out the below line and uncomment the line after it to do a test build with -fanalyzer
-	$(CC) -g src/kloakwl.c src/xdg-shell-protocol.c src/xdg-output-protocol.c src/wlr-layer-shell.c src/wlr-virtual-pointer.c src/virtual-keyboard.c -o kloakwl -lm -lcap $(shell $(PKG_CONFIG) --cflags --libs wayland-client) $(shell $(PKG_CONFIG) --cflags --libs xkbcommon) $(CFLAGS) $(LDFLAGS)
-	#$(CC) -g src/kloakwl.c src/xdg-shell-protocol.c src/xdg-output-protocol.c src/wlr-layer-shell.c src/wlr-virtual-pointer.c src/virtual-keyboard.c -o kloakwl -lm -lcap $(shell $(PKG_CONFIG) --cflags --libs wayland-client) $(shell $(PKG_CONFIG) --cflags --libs xkbcommon) -fanalyzer
+	$(CC) -g src/kloakwl.c src/xdg-shell-protocol.c src/xdg-output-protocol.c src/wlr-layer-shell.c src/wlr-virtual-pointer.c src/virtual-keyboard.c -o kloakwl -lm -lrt -lcap $(shell $(PKG_CONFIG) --cflags --libs wayland-client) $(shell $(PKG_CONFIG) --cflags --libs xkbcommon) $(CFLAGS) $(LDFLAGS)
+	#$(CC) -g src/kloakwl.c src/xdg-shell-protocol.c src/xdg-output-protocol.c src/wlr-layer-shell.c src/wlr-virtual-pointer.c src/virtual-keyboard.c -o kloakwl -lm -lrt -lcap $(shell $(PKG_CONFIG) --cflags --libs wayland-client) $(shell $(PKG_CONFIG) --cflags --libs xkbcommon) -fanalyzer
 
 kloak : src/kloak.c src/kloak.h src/kloak-shared.h
 	## Comment out the below line and uncomment the line after it to do a test build with -fanalyzer
-	$(CC) -g src/kloak.c -o kloak -lm $(shell $(PKG_CONFIG) --cflags --libs libinput) $(shell $(PKG_CONFIG) --cflags --libs libevdev) $(CFLAGS) $(LDFLAGS)
-	#$(CC) -g src/kloak.c -o kloak -lm $(shell $(PKG_CONFIG) --cflags --libs libinput) $(shell $(PKG_CONFIG) --cflags --libs libevdev) -fanalyzer
+	$(CC) -g src/kloak.c -o kloak -lm -lrt $(shell $(PKG_CONFIG) --cflags --libs libinput) $(shell $(PKG_CONFIG) --cflags --libs libevdev) $(CFLAGS) $(LDFLAGS)
+	#$(CC) -g src/kloak.c -o kloak -lm -lrt $(shell $(PKG_CONFIG) --cflags --libs libinput) $(shell $(PKG_CONFIG) --cflags --libs libevdev) -fanalyzer
 
 src/xdg-shell-protocol.h : protocol/xdg-shell.xml
 	wayland-scanner client-header < protocol/xdg-shell.xml > src/xdg-shell-protocol.h

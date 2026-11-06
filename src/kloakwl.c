@@ -177,17 +177,6 @@ static int64_t current_time_ms(void) {
   return result - start_time;
 }
 
-static void read_random(char *buf, ssize_t len) {
-  assert(len >= 0);
-  assert(buf != NULL);
-
-  if (read(CHILD_FD_URANDOM, buf, (size_t)(len)) < len) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not read %ld byte(s) from /dev/urandom!\n", len);
-    exit(1);
-  }
-}
-
 static int64_t random_between(int64_t lower, int64_t upper) {
   int64_t maxval = 0;
   int64_t randval;
@@ -936,7 +925,7 @@ static void layer_surface_configure(void *data,
   layer->size = layer->stride * layer->height;
   assert(layer->size >= 0);
   assert(layer->size <= INT32_MAX / MAX_UNRELEASED_FRAMES);
-  shm_fd = create_memfd_file(layer->size * MAX_UNRELEASED_FRAMES);
+  shm_fd = allocate_shm(layer->size * MAX_UNRELEASED_FRAMES);
   layer->pixbuf = mmap(NULL, (size_t)(layer->size * MAX_UNRELEASED_FRAMES),
     PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
   if (layer->pixbuf == MAP_FAILED) {
@@ -2104,18 +2093,6 @@ static void applayer_config_init(void) {
   }
 }
 
-/*
- * CHILD_FD_URANDOM is intentionally hardcoded and never closed. See fd
- * definitions in kloakwl.h for more info.
- */
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wanalyzer-fd-leak"
-static void applayer_random_init(void) {
-  int randfd = safe_open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-  move_fd(randfd, CHILD_FD_URANDOM);
-}
-#pragma GCC diagnostic pop
-
 static void applayer_wlsock_init(void) {
   int wl_sock_fd = open_wl_sock();
   move_fd(wl_sock_fd, CHILD_FD_WLSOCK);
@@ -2130,6 +2107,9 @@ static void applayer_sandbox_init(void) {
   int wait_status = 0;
   const char *xkb_path_component_list[] = {
     "/tmp", "/usr", "/share", "/X11", "/xkb", NULL
+  };
+  const char *dev_shm_path_component_list[] = {
+    "/tmp", "/dev", "/shm", NULL
   };
 
   /*
@@ -2280,14 +2260,14 @@ static void applayer_sandbox_init(void) {
   }
 
   /*
-   * Mount a tiny, empty tmpfs to /tmp. This will hide the contents of /tmp
-   * from the process and give us a safe place to pivot root into. We will
-   * later make this read-only for good measure, but we need to bind-mount
-   * /usr/share/X11/xkb into a subdir of it first so that XKB can initialize.
+   * Mount a small, empty tmpfs to /tmp. This will hide the contents of /tmp
+   * from the process, give us a safe place to pivot root into, and allow us to
+   * allocate shared memory safely. The tmpfs is 532 M in size to accomodate up
+   * to four 8K displays with 32-bit ARGB pixels.
    */
   if (mount("newroot", "/tmp", "tmpfs",
     MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_NOSYMFOLLOW,
-    "size=1M,mode=700") == -1) {
+    "size=532M,mode=700") == -1) {
     fprintf(stderr,
       "FATAL ERROR: Could not set up safe chroot zone: %s\n", strerror(errno));
     exit(1);
@@ -2299,6 +2279,9 @@ static void applayer_sandbox_init(void) {
     exit(1);
   }
 
+  /* Create a shared memory allocation dir. */
+  safe_mkdir_p(dev_shm_path_component_list);
+
   /* Bind-mount XKB data into the sandbox filesystem. */
   safe_mkdir_p(xkb_path_component_list);
   if (mount("/usr/share/X11/xkb", "/tmp/usr/share/X11/xkb", "",
@@ -2309,17 +2292,9 @@ static void applayer_sandbox_init(void) {
     exit(1);
   }
 
-  /* Lock down permissions on /tmp now. */
-  if (mount("", "/tmp", "", MS_REMOUNT | MS_RDONLY, NULL) == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not lock /tmp read-only: %s\n", strerror(errno));
-    exit(1);
-  }
-
   /*
-   * Pivot into the empty read-only mountpoint we just made. The filesystem
-   * will still be there, but we will be able to unmount it to trap ourselves
-   * in the safe directory.
+   * Pivot into the tmpfs we just made. The filesystem will still be there, but
+   * we will be able to unmount it to trap ourselves in the safe directory.
    */
   if (syscall(SYS_pivot_root, ".", ".") == -1) {
     fprintf(stderr,
@@ -2527,8 +2502,8 @@ int main(int argc, char **argv) {
 
   TAILQ_INIT(&evq_head);
 
+  init_fd_urandom();
   applayer_config_init();
-  applayer_random_init();
   applayer_wlsock_init();
   applayer_sandbox_init();
   /*

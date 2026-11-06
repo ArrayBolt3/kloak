@@ -7,16 +7,13 @@
 /* Static defines, do not change */
 /*********************************/
 
-/* File descriptor number for /dev/urandom. */
-#define CHILD_FD_URANDOM 3
-
 /* File descriptor number for the Wayland socket. */
 #define CHILD_FD_WLSOCK 4
 
 /*
  * NOTE: CHILD_FD_WLSOCK must ALWWAYS have the highest fd number of defined
- * fds. The child process will close_range() all file descriptors higher than
- * this.
+ * fds (including those in kloak-shared.h). The child process will
+ * close_range() all file descriptors higher than this.
  */
 /* Number of fds watched by the main loop poll. */
 #define POLL_FD_COUNT 2
@@ -199,12 +196,6 @@ static int64_t timespec_to_ms(struct timespec spec);
 
 /* Returns a monotonic 64-bit timestamp. */
 static int64_t current_time_ms(void);
-
-/*
- * Reads the specified number of random bytes from /dev/urandom into the
- * specified buffer.
- */
-static void read_random(char *buf, ssize_t len);
 
 /* Generates a random 64-bit number between lower and upper inclusive. */
 static int64_t random_between(int64_t lower, int64_t upper);
@@ -445,9 +436,6 @@ static void release_scheduled_input_events(void);
 
 /* Handles configuration messages from the parent. */
 static void applayer_config_init(void);
-
-/* Opens and moves a file descriptor for /dev/urandom. */
-static void applayer_random_init(void);
 
 /* Opens and moves a file descriptor for the Wayland socket. */
 static void applayer_wlsock_init(void);
