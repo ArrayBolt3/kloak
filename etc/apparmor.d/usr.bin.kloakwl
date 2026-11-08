@@ -25,7 +25,8 @@ include <tunables/global>
 
   mount options=rprivate /,
   mount fstype=tmpfs options=(rw,nosuid,nodev,noexec,nosymfollow) newroot -> /tmp/,
-  mount options=(ro,bind) /usr/share/X11/xkb/ -> /tmp/usr/share/X11/xkb/,
+  mount options=bind /usr/share/X11/xkb/ -> /tmp/usr/share/X11/xkb/,
+  remount options=(ro, bind) /tmp/usr/share/X11/xkb/,
 
   pivot_root oldroot=/tmp/ /tmp/,
 

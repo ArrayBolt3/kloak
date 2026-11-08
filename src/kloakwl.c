@@ -581,6 +581,7 @@ static void registry_handle_global_remove(void *data,
     for (i = 0; i < MAX_SCREEN_COUNT; i++) {
       if (param_state->layers[i] && param_state->output_names[i] == name) {
         param_state->wl_output_remove_flags[i] = true;
+        param_state->xdg_output_reconfig_flags[i] = false;
         display_sync_maybe(param_state);
         break;
       }
@@ -2285,9 +2286,21 @@ static void applayer_sandbox_init(void) {
   /* Bind-mount XKB data into the sandbox filesystem. */
   safe_mkdir_p(xkb_path_component_list);
   if (mount("/usr/share/X11/xkb", "/tmp/usr/share/X11/xkb", "",
-    MS_BIND | MS_RDONLY, NULL) == -1) {
+    MS_BIND, NULL) == -1) {
     fprintf(stderr,
       "FATAL ERROR: Could not bind-mount XKB data into sandbox: %s\n",
+      strerror(errno));
+    exit(1);
+  }
+
+  /*
+   * MS_RDONLY is ignored when initially mounting a dir with MS_BIND, so we
+   * need to remount it to set it read-only.
+   */
+  if (mount("", "/tmp/usr/share/X11/xkb", "", MS_REMOUNT | MS_BIND | MS_RDONLY,
+    NULL) == -1) {
+    fprintf(stderr,
+      "FATAL ERROR: Could not make XKB bind-mount read-only: %s\n",
       strerror(errno));
     exit(1);
   }

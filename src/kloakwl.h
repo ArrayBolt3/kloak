@@ -79,7 +79,7 @@ struct screen_local_coord {
 
 /* Defines the type of a buffered input event. */
 enum input_packet_type {
-  KLOAK_PACKET_TYPE_MOUSEMOVE,
+  KLOAK_PACKET_TYPE_MOUSEMOVE = 1,
   KLOAK_PACKET_TYPE_MOUSESCROLL,
   KLOAK_PACKET_TYPE_CLICK,
   KLOAK_PACKET_TYPE_KB,
