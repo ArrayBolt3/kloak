@@ -505,19 +505,18 @@ static int32_t get_ticks_from_scroll_accum(double *accum_ptr) {
 /* Wayland handling functions */
 /******************************/
 
-static void registry_handle_global(void *data, struct wl_registry *registry,
-  uint32_t name, const char *interface,
+static void registry_handle_global(__attribute__((unused)) void *data,
+  struct wl_registry *registry, uint32_t name, const char *interface,
   __attribute__((unused)) uint32_t version) {
-  struct disp_state *param_state = data;
   ssize_t i = 0;
 
   if (strcmp(interface, wl_compositor_interface.name) == 0) {
-    param_state->compositor = wl_registry_bind(registry, name,
+    state.compositor = wl_registry_bind(registry, name,
       &wl_compositor_interface, 5);
 
   } else if (strcmp(interface, wl_seat_interface.name) == 0) {
-    if (!param_state->seat) {
-      param_state->seat = wl_registry_bind(
+    if (!state.seat) {
+      state.seat = wl_registry_bind(
         registry, name, &wl_seat_interface, 9);
     } else {
       fprintf(stderr,
@@ -525,18 +524,18 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     }
 
   } else if (strcmp(interface, wl_shm_interface.name) == 0) {
-    param_state->shm = wl_registry_bind(registry, name, &wl_shm_interface, 2);
+    state.shm = wl_registry_bind(registry, name, &wl_shm_interface, 2);
 
   } else if (strcmp(interface, wl_output_interface.name) == 0) {
     bool new_output_assigned = false;
 
     for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-      if (!param_state->outputs[i]) {
-        param_state->outputs[i] = wl_registry_bind(registry, name,
+      if (!state.outputs[i]) {
+        state.outputs[i] = wl_registry_bind(registry, name,
           &wl_output_interface, 4);
-        param_state->output_names[i] = name;
+        state.output_names[i] = name;
         if (did_wayland_init) {
-          init_new_display(param_state, i);
+          init_new_display(i);
         }
         new_output_assigned = true;
         break;
@@ -550,39 +549,38 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     }
 
   } else if (strcmp(interface, zxdg_output_manager_v1_interface.name) == 0) {
-    param_state->xdg_output_manager = wl_registry_bind(registry, name,
+    state.xdg_output_manager = wl_registry_bind(registry, name,
       &zxdg_output_manager_v1_interface, 3);
 
   } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
     if (should_draw_cursor) {
-      param_state->layer_shell = wl_registry_bind(registry, name,
+      state.layer_shell = wl_registry_bind(registry, name,
         &zwlr_layer_shell_v1_interface, 4);
     }
 
   } else if (strcmp(interface,
     zwlr_virtual_pointer_manager_v1_interface.name) == 0) {
-    param_state->virt_pointer_manager = wl_registry_bind(registry, name,
+    state.virt_pointer_manager = wl_registry_bind(registry, name,
       &zwlr_virtual_pointer_manager_v1_interface, 2);
 
   } else if (strcmp(interface,
     zwp_virtual_keyboard_manager_v1_interface.name) == 0) {
-    param_state->virt_kb_manager = wl_registry_bind(registry, name,
+    state.virt_kb_manager = wl_registry_bind(registry, name,
       &zwp_virtual_keyboard_manager_v1_interface, 1);
   }
 }
 
-static void registry_handle_global_remove(void *data,
+static void registry_handle_global_remove(__attribute__((unused)) void *data,
    __attribute__((unused)) struct wl_registry *registry,
   uint32_t name) {
-  struct disp_state *param_state = data;
   ssize_t i = 0;
 
   if (did_wayland_init) {
     for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-      if (param_state->layers[i] && param_state->output_names[i] == name) {
-        param_state->wl_output_remove_flags[i] = true;
-        param_state->xdg_output_reconfig_flags[i] = false;
-        display_sync_maybe(param_state);
+      if (state.layers[i] && state.output_names[i] == name) {
+        state.wl_output_remove_flags[i] = true;
+        state.xdg_output_reconfig_flags[i] = false;
+        display_sync_maybe();
         break;
       }
     }
@@ -593,31 +591,29 @@ static void registry_handle_global_remove(void *data,
      * immediately in this instance.
      */
     for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-      if (param_state->outputs[i] && param_state->output_names[i] == name) {
-        wl_output_release(param_state->outputs[i]);
-        param_state->outputs[i] = NULL;
-        param_state->output_names[i] = 0;
+      if (state.outputs[i] && state.output_names[i] == name) {
+        wl_output_release(state.outputs[i]);
+        state.outputs[i] = NULL;
+        state.output_names[i] = 0;
         break;
       }
     }
   }
 }
 
-static void seat_handle_name(void *data,
+static void seat_handle_name(__attribute__((unused)) void *data,
   __attribute__((unused)) struct wl_seat *seat, const char *name) {
-  struct disp_state *param_state = data;
 
-  param_state->seat_name = name;
+  state.seat_name = name;
 }
 
-static void seat_handle_capabilities(void *data, struct wl_seat *seat,
-  uint32_t capabilities) {
-  struct disp_state *param_state = data;
+static void seat_handle_capabilities(__attribute__((unused)) void *data,
+  struct wl_seat *seat, uint32_t capabilities) {
 
-  param_state->seat_caps = capabilities;
+  state.seat_caps = capabilities;
   if (capabilities & WL_SEAT_CAPABILITY_KEYBOARD) {
-    param_state->kb = wl_seat_get_keyboard(seat);
-    wl_keyboard_add_listener(param_state->kb, &kb_listener, param_state);
+    state.kb = wl_seat_get_keyboard(seat);
+    wl_keyboard_add_listener(state.kb, &kb_listener, &state);
   } else {
     fprintf(stderr,
       "FATAL ERROR: No keyboard capability for seat, cannot continue.\n");
@@ -625,10 +621,9 @@ static void seat_handle_capabilities(void *data, struct wl_seat *seat,
   }
 }
 
-static void kb_handle_keymap(void *data,
+static void kb_handle_keymap(__attribute__((unused)) void *data,
   __attribute__((unused)) struct wl_keyboard *kb,
   uint32_t format, int32_t fd, uint32_t size) {
-  struct disp_state *param_state = data;
   char *kb_map_shm = NULL;
 
   if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
@@ -658,41 +653,41 @@ static void kb_handle_keymap(void *data,
     exit(1);
   }
 
-  if (param_state->old_kb_map_shm) {
-    if (strcmp(param_state->old_kb_map_shm, kb_map_shm) == 0) {
+  if (state.old_kb_map_shm) {
+    if (strcmp(state.old_kb_map_shm, kb_map_shm) == 0) {
       /* New and old maps are the same, cleanup and return. */
       munmap(kb_map_shm, size);
       safe_close(fd);
       return;
     } else {
-      assert(param_state->old_kb_map_shm_size >= 0);
-      munmap(param_state->old_kb_map_shm,
-        (size_t)(param_state->old_kb_map_shm_size));
+      assert(state.old_kb_map_shm_size >= 0);
+      munmap(state.old_kb_map_shm,
+        (size_t)(state.old_kb_map_shm_size));
     }
   }
-  zwp_virtual_keyboard_v1_keymap(param_state->virt_kb, format, fd, size);
-  param_state->old_kb_map_shm = kb_map_shm;
-  param_state->old_kb_map_shm_size = (int32_t)(size);
-  if (param_state->xkb_keymap) {
-    xkb_keymap_unref(param_state->xkb_keymap);
+  zwp_virtual_keyboard_v1_keymap(state.virt_kb, format, fd, size);
+  state.old_kb_map_shm = kb_map_shm;
+  state.old_kb_map_shm_size = (int32_t)(size);
+  if (state.xkb_keymap) {
+    xkb_keymap_unref(state.xkb_keymap);
   }
-  param_state->xkb_keymap = xkb_keymap_new_from_string(
-    param_state->xkb_ctx, kb_map_shm, XKB_KEYMAP_FORMAT_TEXT_V1,
+  state.xkb_keymap = xkb_keymap_new_from_string(
+    state.xkb_ctx, kb_map_shm, XKB_KEYMAP_FORMAT_TEXT_V1,
     XKB_KEYMAP_COMPILE_NO_FLAGS);
-  if (!param_state->xkb_keymap) {
+  if (!state.xkb_keymap) {
     fprintf(stderr, "FATAL ERROR: Could not compile xkb layout!\n");
     exit(1);
   }
   safe_close(fd);
-  if (param_state->xkb_state) {
-    xkb_state_unref(param_state->xkb_state);
+  if (state.xkb_state) {
+    xkb_state_unref(state.xkb_state);
   }
-  param_state->xkb_state = xkb_state_new(param_state->xkb_keymap);
-  if (!param_state->xkb_state) {
+  state.xkb_state = xkb_state_new(state.xkb_keymap);
+  if (!state.xkb_state) {
     fprintf(stderr, "FATAL ERROR: Could not create xkb state!\n");
     exit(1);
   }
-  param_state->virt_kb_keymap_set = true;
+  state.virt_kb_keymap_set = true;
 }
 
 /*
@@ -764,17 +759,17 @@ static void wl_output_handle_mode(__attribute__((unused)) void *data,
   ;
 }
 
-static void wl_output_info_done(void *data, struct wl_output *output) {
-  struct disp_state *param_state = data;
+static void wl_output_info_done(__attribute__((unused)) void *data,
+  struct wl_output *output) {
 
   for (ssize_t i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->outputs[i] == output) {
-      param_state->xdg_output_reconfig_flags[i] = false;
+    if (state.outputs[i] == output) {
+      state.xdg_output_reconfig_flags[i] = false;
       break;
     }
   }
 
-  display_sync_maybe(param_state);
+  display_sync_maybe();
 }
 
 static void wl_output_handle_scale(__attribute__((unused)) void *data,
@@ -795,34 +790,33 @@ static void wl_output_handle_description(__attribute__((unused)) void *data,
   ;
 }
 
-static void xdg_output_handle_logical_position(void *data,
-  struct zxdg_output_v1 *xdg_output, int32_t x, int32_t y) {
-  struct disp_state *param_state = data;
+static void xdg_output_handle_logical_position(
+  __attribute__((unused)) void *data, struct zxdg_output_v1 *xdg_output,
+  int32_t x, int32_t y) {
   ssize_t i = 0;
 
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->xdg_outputs[i] == xdg_output) {
-      param_state->pending_output_geometries[i]->x = x;
-      param_state->pending_output_geometries[i]->y = y;
-      param_state->xdg_output_reconfig_flags[i] = true;
+    if (state.xdg_outputs[i] == xdg_output) {
+      state.pending_output_geometries[i]->x = x;
+      state.pending_output_geometries[i]->y = y;
+      state.xdg_output_reconfig_flags[i] = true;
       break;
     }
   }
 }
 
-static void xdg_output_handle_logical_size(void *data,
+static void xdg_output_handle_logical_size(__attribute__((unused)) void *data,
   struct zxdg_output_v1 *xdg_output, int32_t width, int32_t height) {
-  struct disp_state *param_state = data;
   ssize_t i = 0;
 
   assert(width >= 0);
   assert(height >= 0);
 
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->xdg_outputs[i] == xdg_output) {
-      param_state->pending_output_geometries[i]->width = width;
-      param_state->pending_output_geometries[i]->height = height;
-      param_state->xdg_output_reconfig_flags[i] = true;
+    if (state.xdg_outputs[i] == xdg_output) {
+      state.pending_output_geometries[i]->width = width;
+      state.pending_output_geometries[i]->height = height;
+      state.xdg_output_reconfig_flags[i] = true;
       break;
     }
   }
@@ -850,10 +844,9 @@ static void xdg_output_handle_description(__attribute__((unused)) void *data,
   ;
 }
 
-static void layer_surface_configure(void *data,
+static void layer_surface_configure(__attribute__((unused)) void *data,
   struct zwlr_layer_surface_v1 *layer_surface, uint32_t serial, uint32_t width,
   uint32_t height) {
-  struct disp_state *param_state = data;
   struct drawable_layer *layer = NULL;
   struct output_geometry *geometry = NULL;
   ssize_t i = 0;
@@ -863,9 +856,9 @@ static void layer_surface_configure(void *data,
   assert(should_draw_cursor);
 
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->layers[i]) {
-      if (param_state->layers[i]->layer_surface == layer_surface) {
-        layer = param_state->layers[i];
+    if (state.layers[i]) {
+      if (state.layers[i]->layer_surface == layer_surface) {
+        layer = state.layers[i];
         /*
          * The layer might already be initialized (if, for instance, one of the
          * screens was resized), so free any previously allocated resources.
@@ -894,7 +887,7 @@ static void layer_surface_configure(void *data,
          * be drawn when the mouse moves into an area we didn't allocate layer
          * space for.
          */
-        geometry = param_state->pending_output_geometries[i];
+        geometry = state.pending_output_geometries[i];
         break;
       }
     }
@@ -936,7 +929,7 @@ static void layer_surface_configure(void *data,
       strerror(errno));
     exit(1);
   }
-  layer->shm_pool = wl_shm_create_pool(param_state->shm, shm_fd,
+  layer->shm_pool = wl_shm_create_pool(state.shm, shm_fd,
     layer->size * MAX_UNRELEASED_FRAMES);
   /*
    * Both the client and the server have now mmap'd the file, and `man 2 mmap`
@@ -945,7 +938,7 @@ static void layer_surface_configure(void *data,
    */
   safe_close(shm_fd);
 
-  zeroed_region = wl_compositor_create_region(param_state->compositor);
+  zeroed_region = wl_compositor_create_region(state.compositor);
   wl_region_add(zeroed_region, 0, 0, 0, 0);
   wl_surface_set_input_region(layer->surface, zeroed_region);
 
@@ -1107,17 +1100,15 @@ static void drop_capabilities(void) {
   }
 }
 
-static void init_new_display(struct disp_state *param_state,
-  ssize_t disp_idx) {
-  param_state->layers[disp_idx] = allocate_drawable_layer(param_state,
-    param_state->outputs[disp_idx]);
-  param_state->xdg_outputs[disp_idx] = zxdg_output_manager_v1_get_xdg_output(
-    param_state->xdg_output_manager, param_state->outputs[disp_idx]);
-  zxdg_output_v1_add_listener(param_state->xdg_outputs[disp_idx],
-    &xdg_output_listener, param_state);
-  wl_output_add_listener(param_state->outputs[disp_idx], &output_listener,
-    param_state);
-  param_state->pending_output_geometries[disp_idx] = safe_calloc(1,
+static void init_new_display(ssize_t disp_idx) {
+  state.layers[disp_idx] = allocate_drawable_layer(state.outputs[disp_idx]);
+  state.xdg_outputs[disp_idx] = zxdg_output_manager_v1_get_xdg_output(
+    state.xdg_output_manager, state.outputs[disp_idx]);
+  zxdg_output_v1_add_listener(state.xdg_outputs[disp_idx],
+    &xdg_output_listener, &state);
+  wl_output_add_listener(state.outputs[disp_idx], &output_listener,
+    &state);
+  state.pending_output_geometries[disp_idx] = safe_calloc(1,
     sizeof(struct output_geometry));
 }
 
@@ -1129,12 +1120,12 @@ static void send_pointer_space_data(void) {
   send_msg_to_peer(CTP_PACKET_POINTER_SPACE_DATA, 1, &pointer_space_data);
 }
 
-static void display_sync_maybe(struct disp_state *param_state) {
+static void display_sync_maybe(void) {
   bool should_sync_displays = true;
   ssize_t i = 0;
 
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->xdg_output_reconfig_flags[i]) {
+    if (state.xdg_output_reconfig_flags[i]) {
       should_sync_displays = false;
       break;
     }
@@ -1145,22 +1136,22 @@ static void display_sync_maybe(struct disp_state *param_state) {
   }
 
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (param_state->wl_output_remove_flags[i]) {
-      struct drawable_layer *layer = param_state->layers[i];
+    if (state.wl_output_remove_flags[i]) {
+      struct drawable_layer *layer = state.layers[i];
 
       if (layer->layer_surface != NULL) {
         assert(should_draw_cursor);
         zwlr_layer_surface_v1_destroy(layer->layer_surface);
       }
-      wl_output_release(param_state->outputs[i]);
-      param_state->outputs[i] = NULL;
-      param_state->output_names[i] = 0;
-      zxdg_output_v1_destroy(param_state->xdg_outputs[i]);
-      param_state->xdg_outputs[i] = NULL;
-      free(param_state->pending_output_geometries[i]);
-      param_state->pending_output_geometries[i] = NULL;
-      free(param_state->output_geometries[i]);
-      param_state->output_geometries[i] = NULL;
+      wl_output_release(state.outputs[i]);
+      state.outputs[i] = NULL;
+      state.output_names[i] = 0;
+      zxdg_output_v1_destroy(state.xdg_outputs[i]);
+      state.xdg_outputs[i] = NULL;
+      free(state.pending_output_geometries[i]);
+      state.pending_output_geometries[i] = NULL;
+      free(state.output_geometries[i]);
+      state.output_geometries[i] = NULL;
       if (layer->surface != NULL) {
         assert(should_draw_cursor);
         wl_surface_destroy(layer->surface);
@@ -1176,24 +1167,24 @@ static void display_sync_maybe(struct disp_state *param_state) {
         wl_shm_pool_destroy(layer->shm_pool);
       }
       free(layer);
-      param_state->layers[i] = NULL;
-      param_state->wl_output_remove_flags[i] = false;
+      state.layers[i] = NULL;
+      state.wl_output_remove_flags[i] = false;
     } else {
       struct output_geometry *geometry
-        = param_state->pending_output_geometries[i];
+        = state.pending_output_geometries[i];
       if (geometry == NULL) {
         continue;
       }
-      if (param_state->output_geometries[i] == NULL) {
-        param_state->output_geometries[i] = safe_calloc(1,
+      if (state.output_geometries[i] == NULL) {
+        state.output_geometries[i] = safe_calloc(1,
           sizeof(struct output_geometry));
       }
-      memcpy(param_state->output_geometries[i], geometry,
+      memcpy(state.output_geometries[i], geometry,
         sizeof(struct output_geometry));
     }
   }
 
-  if (!recalc_global_space(param_state)) {
+  if (!recalc_global_space()) {
     fprintf(stderr,
       "FATAL ERROR: Multiple screens are attached and gaps are present between them. kloak cannot operate in this configuration.\n");
     exit(1);
@@ -1204,7 +1195,7 @@ static void display_sync_maybe(struct disp_state *param_state) {
   }
 }
 
-static bool recalc_global_space(struct disp_state *param_state) {
+static bool recalc_global_space(void) {
   int32_t ul_corner_x = INT32_MAX;
   int32_t ul_corner_y = INT32_MAX;
   int32_t br_corner_x = INT32_MIN;
@@ -1224,13 +1215,13 @@ static bool recalc_global_space(struct disp_state *param_state) {
   struct output_geometry *cur_screen = NULL;
 
   for (ssize_t i = 0; i < MAX_SCREEN_COUNT; i++) {
-    if (!param_state->output_geometries[i]) {
+    if (!state.output_geometries[i]) {
       continue;
     }
-    cur_geom_x = param_state->output_geometries[i]->x;
-    cur_geom_y = param_state->output_geometries[i]->y;
-    cur_geom_width = param_state->output_geometries[i]->width;
-    cur_geom_height = param_state->output_geometries[i]->height;
+    cur_geom_x = state.output_geometries[i]->x;
+    cur_geom_y = state.output_geometries[i]->y;
+    cur_geom_width = state.output_geometries[i]->width;
+    cur_geom_height = state.output_geometries[i]->height;
     if (cur_geom_width < 0 || cur_geom_height < 0) {
       continue;
     }
@@ -1243,7 +1234,7 @@ static bool recalc_global_space(struct disp_state *param_state) {
        */
       continue;
     }
-    screen_list[screen_list_len] = param_state->output_geometries[i];
+    screen_list[screen_list_len] = state.output_geometries[i];
     screen_list_len++;
     if (cur_geom_x < ul_corner_x) {
       ul_corner_x = cur_geom_x;
@@ -1316,15 +1307,15 @@ static bool recalc_global_space(struct disp_state *param_state) {
     return false;
   }
 
-  param_state->global_space_width = br_corner_x - ul_corner_x;
-  param_state->global_space_height = br_corner_y - ul_corner_y;
-  param_state->pointer_space_x = ul_corner_x;
-  param_state->pointer_space_y = ul_corner_y;
+  state.global_space_width = br_corner_x - ul_corner_x;
+  state.global_space_height = br_corner_y - ul_corner_y;
+  state.pointer_space_x = ul_corner_x;
+  state.pointer_space_y = ul_corner_y;
   return true;
 }
 
 static struct drawable_layer *allocate_drawable_layer(
-  struct disp_state *param_state, struct wl_output *output) {
+  struct wl_output *output) {
   struct drawable_layer *layer = safe_calloc(1, sizeof(struct drawable_layer));
   ssize_t i = 0;
 
@@ -1338,16 +1329,16 @@ static struct drawable_layer *allocate_drawable_layer(
 
   if (should_draw_cursor) {
     layer->frame_pending = true;
-    layer->surface = wl_compositor_create_surface(param_state->compositor);
+    layer->surface = wl_compositor_create_surface(state.compositor);
     if (!layer->surface) {
       fprintf(stderr, "FATAL ERROR: Could not create Wayland surface!\n");
       exit(1);
     }
     layer->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-      param_state->layer_shell, layer->surface, layer->output,
+      state.layer_shell, layer->surface, layer->output,
       ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "com.kicksecure.kloak");
     zwlr_layer_surface_v1_add_listener(layer->layer_surface,
-      &layer_surface_listener, param_state);
+      &layer_surface_listener, &state);
 
     zwlr_layer_surface_v1_set_anchor(
       layer->layer_surface,
@@ -2465,7 +2456,7 @@ static void applayer_wayland_init(void) {
   }
   for (i = 0; i < MAX_SCREEN_COUNT; i++) {
     if (state.outputs[i]) {
-      init_new_display(&state, i);
+      init_new_display(i);
     }
   }
 

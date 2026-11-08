@@ -319,8 +319,7 @@ static int open_wl_sock(void);
 static void drop_capabilities(void);
 
 /* Sets up structures, objects, and listeners for a newly attached display. */
-static void init_new_display(struct disp_state *param_state,
-  ssize_t disp_idx);
+static void init_new_display(ssize_t disp_idx);
 
 /* Sends information about kloak's pointer space to the parent. */
 static void send_pointer_space_data(void);
@@ -330,21 +329,21 @@ static void send_pointer_space_data(void);
  * information, cleans up removed displays and their associated data, and
  * recalculates global space.
  */
-static void display_sync_maybe(struct disp_state *state);
+static void display_sync_maybe(void);
 
 /*
  * Checks screen continuity and calculates the size of the global compositor
  * space and the location of the upper-left corner of the pointer's coordinate
  * space. Returns true on success, false if there are gaps between displays.
  */
-static bool recalc_global_space(struct disp_state *param_state);
+static bool recalc_global_space(void);
 
 /*
  * Allocates a drawable_layer struct for the specified display, and registers
  * it with the compositor.
  */
 static struct drawable_layer *allocate_drawable_layer(
-  struct disp_state *param_state, struct wl_output *output);
+  struct wl_output *output);
 
 /*
  * Damages the specified region of the specified surface. Takes the same
