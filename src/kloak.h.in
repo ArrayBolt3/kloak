@@ -1,6 +1,8 @@
 /*
  * SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Data and definitions for kloak.c.
  */
 
 /*********************************/
@@ -12,14 +14,17 @@
  * executable under the installation binary prefix.
  */
 #define KLOAKWL_PATH "@KLOAKWL_PATH@"
+
 /* Number of fds watched by the main loop poll. */
 #define POLL_FD_COUNT 3
+
 /*
  * Number to multiply degrees of rotation by to get 120ths of a scroll tick.
  * See the comment about scroll handling in process_libinput_event for more
  * details.
  */
 #define SCROLL_ANGLE_TO_UNITS_FACTOR_D 8.0
+
 /* The length of the buffer to read inotify events into. */
 #define INOTIFY_READ_BUF_LEN 16384
 
@@ -32,8 +37,10 @@
  * release.
  */
 #define DEFAULT_MAX_DELAY_MS 100
+
 /* Default value for the delay between kloak start and initialization. */
 #define DEFAULT_STARTUP_TIMEOUT_MS 500
+
 /* Default escape key sequence to make kloak terminate. */
 #define DEFAULT_ESC_KEY_STR "KEY_RIGHTSHIFT,KEY_ESC"
 
@@ -67,27 +74,45 @@ struct li_device_info {
 /*******************************/
 
 /*
+ * Duplicates a string and returns a pointer to the duplicate. Aborts the
+ * program if this fails.
+ */
+static char *safe_strdup(const char *s);
+
+/*
  * Reallocates the requested amount of memory and returns a pointer to it.
- * Kills the process if the allocation fails.
+ * Aborts the program if this fails.
  */
 static void *safe_reallocarray(void *ptr, size_t nmemb, size_t size);
 
-/* Opens a directory. Kills the process if the open fails. */
+/*
+ * Opens a directory and returns the directory stream. Aborts the program if
+ * this fails.
+ */
 static DIR *safe_opendir(const char *name);
 
-/* Closes a directory. Kills the process if the close fails. */
-static void safe_closedir(DIR *dirp);
+/*
+ * Closes a directory. Aborts the program if this fails. fileinfo is used only
+ * as part of an error message when aborting.
+ */
+static void safe_closedir(DIR *dirp, const char *fileinfo);
 
 /* Converts a millisecond count to a timespec. */
 static struct timespec ms_to_timespec(int64_t ms);
 
-/* Looks up a key code in the key table. */
+/* Looks up a key code in the key table. Returns 0 on failure. */
 static uint32_t lookup_keycode(const char *name);
 
-/* Attempts to add an input device to the current libinput context. */
+/*
+ * Attempts to add an input device to the current libinput context. Failure is
+ * handled silently.
+ */
 static void attach_input_device(const char *dev_name);
 
-/* Attempts to remove an input device from the current libinput context. */
+/*
+ * Attempts to remove an input device from the current libinput context.
+ * Failure is handled silently.
+ */
 static void detach_input_device(const char *dev_name);
 
 /*
@@ -103,18 +128,14 @@ static void detach_input_device(const char *dev_name);
 static void li_device_info_unref(struct li_device_info *ldi);
 
 /*
- * Parse an option parameter as an integer between 0 and INT32_MAX, and save
- * it at the address pointed to by "out". Returns true on success.
+ * Parse an option parameter as an integer between 0 and the specified maximum,
+ * and save it at the address pointed to by "out". Returns true on success,
+ * false on failure.
  */
-static bool parse_uint31_arg(const char *val, int base, int32_t *out);
+static bool parse_uint_arg(const char *val, int base, uint32_t max_val,
+  uint32_t *out);
 
-/*
- * Parse an option parameter as an integer between 0 and UINT32_MAX, and save
- * it at the address pointed to by "out". Returns true on success.
- */
-static bool parse_uint32_arg(const char *val, int base, uint32_t *out);
-
-/* Sleeps for the specified number of milliseconds. */
+/* Sleeps for the specified number of milliseconds. Returns -1 on failure. */
 static int32_t sleep_ms(int64_t ms);
 
 /*****************************************/
@@ -123,18 +144,23 @@ static int32_t sleep_ms(int64_t ms);
 
 /*
  * Opens evdev devices for libinput, grabbing them with EVIOCGRAB so that they
- * can't be used by other applications on the system.
+ * can't be used by other applications on the system. Returns an opened fd on
+ * success, or -errno on failure. Aborts the program if the EVIOCGRAB attempt
+ * fails.
  */
-static int li_open_restricted(const char *path, int flags, void * user_data);
+static int li_open_restricted(const char *path, int flags, void *user_data);
 
-/* Closes evdev devices for libinput. */
+/* Closes evdev devices for libinput. Aborts the program if this fails. */
 static void li_close_restricted(int fd, void *user_data);
 
 /**********************************/
 /* High-level function prototypes */
 /**********************************/
 
-/* Parses an escape key specification into the escape key globals. */
+/*
+ * Parses an escape key specification into the escape key globals. Only safe to
+ * call once.
+ */
 static void parse_esc_key_str(const char *esc_key_str);
 
 /*
@@ -146,14 +172,16 @@ static void register_esc_combo_event(struct button_event key_event);
 /*
  * Searches for an evdev device name in an inotify buffer and returns it.
  * Advances buf_pos_ptr to record where it left off, sets buf_pos_ptr to -1 if
- * an error is encountered.
+ * an error is encountered. *do_attach_ptr is set to true if the named device
+ * should be attached. *inotify_overflow_ptr is set to true if the inotify
+ * queue overflows.
  */
 static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
   ssize_t *buf_pos_ptr, bool *do_attach_ptr, bool *inotify_overflow_ptr);
 
 /*
  * Reads inotify events for /dev/input and attempts to add or remove libinput
- * devices as appropriate.
+ * devices as appropriate. Aborts the program if this fails.
  */
 static void handle_inotify_events(void);
 
@@ -172,11 +200,17 @@ static void register_keyboard_led_event(struct button_event key_event);
  */
 static void process_libinput_event(struct libinput_event *li_event);
 
-/* Updates parent state with the contents of the next child message. */
+/*
+ * Updates parent state with the contents of the next child message. Aborts the
+ * program if this fails.
+ */
 static void process_child_message(void);
 
 /* Prints usage information. */
 static void print_usage(void);
+
+/* Prints a list of recognized key codes. */
+static void print_key_code_list(void);
 
 /**************************************/
 /* Initialization function prototypes */
@@ -201,7 +235,7 @@ static void applayer_libinput_init(void);
 static void applayer_poll_init(void);
 
 /*
- * Checks if an option has been specified twice. Terminates the program if so,
+ * Checks if an option has been specified twice. Aborts the program if so,
  * marks the option as having been seen otherwise.
  */
 static void check_dup_arg_and_mark(int opt, int *seen_opts,

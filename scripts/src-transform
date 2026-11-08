@@ -1,0 +1,60 @@
+#!/bin/bash
+
+## SPDX-FileCopyrightText: ENCRYPTED SUPPORT LLC <adrelanos@whonix.org>
+## SPDX-License-Identifier: AGPL-3.0-or-later
+
+## Converts .in files to their final source code form. Intentionally does not
+## rely on helper-scripts to avoid creating internal build dependencies between
+## Kicksecure/Whonix components.
+##
+## TODO: This is getting to the complexity where we might want to consider
+## using GNU Autotools...
+
+set -o errexit
+set -o nounset
+set -o pipefail
+set -o errtrace
+shopt -s inherit_errexit
+shopt -s shift_verbose
+export LC_ALL=C
+
+transform() {
+  local source_file bindir ev_key_table
+
+  source_file="${1:-}"
+  if [ -z "${source_file}" ]; then
+    printf '%s\n' "FATAL ERROR: No target file provided!"
+    return 1
+  fi
+  out_file="${source_file%%.in}"
+  if [ "${source_file}" = "${out_file}" ]; then
+    printf '%s\n' "FATAL ERROR: Target file is not a source code template!"
+    return 1
+  fi
+
+  case "${source_file##*/}" in
+    kloak.h.in)
+      bindir="${2:-}"
+      if [ -z "${bindir}" ]; then
+        printf '%s\n' "FATAL ERROR: No bindir provided!"
+        return 1
+      fi
+      sed "s#@KLOAKWL_PATH@#${bindir}/kloakwl#;" "${source_file}" > "${out_file}"
+      ;;
+
+    kloak.c.in)
+      ev_key_table="$(grep '^#define KEY_' < /usr/include/linux/input-event-codes.h \
+        | sed '/^#define KEY_RESERVED/d; /^#define KEY_MIN_INTERESTING/d; /^#define KEY_MAX/d; /^#define KEY_CNT/d; s/^#define \(KEY_[^[:space:]]\+\).*/  {"\1", \1},/;')"
+      ev_key_table+=$'\n''  {NULL, 0},'
+      ev_key_table="${ev_key_table//$'\n'/'\n'}"
+      ev_key_table="${ev_key_table#  }"
+      sed "s#@EV_KEY_TABLE@#${ev_key_table}#;" "${source_file}" > "${out_file}"
+      ;;
+
+    *)
+      printf '%s\n' "FATAL ERROR: Unrecognized template '${source_file}'!"
+      return 1
+  esac
+}
+
+transform "$@"

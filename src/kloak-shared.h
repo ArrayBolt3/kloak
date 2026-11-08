@@ -17,6 +17,11 @@
 /* Static defines, do not change */
 /*********************************/
 
+/*
+ * NOTE: Any file descriptor numbers hardcoded here MUST be lower than
+ * CHILD_FD_WLSOCK in kloakwl.h. See kloakwl.h for more information.
+ */
+
 /* File descriptor number for /dev/urandom. */
 #define FD_URANDOM 3
 
@@ -61,8 +66,9 @@ struct button_event {
 /******************/
 
 /*
- * Note: All protocol enums must start with an "unknown" message type with
- * value 0.
+ * NOTE: 0 is a special value for all protocol enums meaning "no message". Enum
+ * names are defined for 0, but do not use them, so that it remains clear that
+ * this sentinel value is used across message types.
  */
 
 /*
@@ -95,12 +101,14 @@ enum ctp_packet_type {
  *   position. Followed by a pair of double-precision floating point numbers
  *   representing the horizontal and vertical offsets, respectively.
  * PTC_PACKET_CURSOR_ABS_EVENT: The cursor has moved to exactly the specified
- *   position in compositor global space. Followed by a pair of
- *   double-precision floating point numbers representing the horizontal and
- *   vertical positions, respectively.
- * PTC_PACKET_SCROLL_EVENT: A scroll wheel has been rotated. Followed by a pair
+ *   position in pointer space. Followed by a pair of double-precision floating
+ *   point numbers representing the horizontal and vertical positions,
+ *   respectively.
+ * PTC_PACKET_SCROLL_EVENT: A scrolling device has been used. Followed by a pair
  *   of double-precision floating point numbers representing the degrees
- *   rotated horizontally and vertically, respectively.
+ *   rotated by a "scroll wheel" horizontally and vertically, respectively.
+ *   Note that scrolling devices that do not involve wheels still have
+ *   scrolling movements interpreted in terms of "degrees rotated".
  * PTC_PACKET_CLICK_EVENT: The user has pressed or released a mouse button.
  *   Followed by a 32-bit unsigned integer specifying which button, and an
  *   8-bit unsigned integer that is either 0 if the button was released or 1 if
@@ -126,20 +134,23 @@ enum ptc_packet_type {
 /*******************************/
 
 /*
- * Allocates a block of initialized memory, aborts the program if this fails.
+ * Allocates a block of initialized memory. Aborts the program if this fails.
  */
 static void *safe_calloc(size_t nmemb, size_t size);
 
-/* Duplicates a string. Kills the process if allocation fails. */
-static char *safe_strdup(const char *s);
-
-/* Opens a file, aborts the program if this fails. */
+/* Opens a file and returns the fd. Aborts the program if this fails. */
 static int safe_open(const char *pathname, int flags);
 
-/* Closes a file, aborts the program if this fails. */
-static void safe_close(int fd);
+/*
+ * Closes a file. Aborts the program if this fails. fileinfo is used only as
+ * part of an error message when aborting.
+ */
+static void safe_close(int fd, const char *fileinfo);
 
-/* Moves a file descriptor from one number to another. */
+/*
+ * Moves a file descriptor from one number to another. Aborts the program if
+ * this fails.
+ */
 static void move_fd(int orig_fd, int new_fd);
 
 /*
@@ -155,8 +166,8 @@ static void init_fd_urandom(void);
 static void read_random(char *buf, ssize_t len);
 
 /*
- * Creates a freshly allocated string from the printf template and arguments
- * provided.
+ * Creates a freshly allocated string from the printf template and argument
+ * list provided, and returns a pointer to the new string.
  */
 static char *vsgenprintf(int *out_len_ptr, const char *str, va_list ap);
 
@@ -165,19 +176,19 @@ static char *sgenprintf(int *out_len_ptr, const char *str, ...);
 
 /*
  * Writes the provided buffer to the given fd, ensuring all bytes are written
- * unless an error occurs.
+ * unless an error occurs. Returns -1 on failure.
  */
 static ssize_t write_all(int fd, const void *buf, size_t count);
 
 /*
  * Fills in the specified number of bytes in the provided buffer with random
- * characters in the range [A-Za-z].
+ * ASCII characters in the range [A-Za-z].
  */
 static void fill_with_rand_alphabetic(char *buf, ssize_t len);
 
 /*
- * Creates a shm file of the specified size. Aborts the program if this
- * fails.
+ * Creates and unlinks a shm file of the specified size, and returns an fd to
+ * the file. Aborts the program if this fails.
  */
 static int allocate_shm(ssize_t size);
 
@@ -193,10 +204,7 @@ static int allocate_shm(ssize_t size);
  * parent.
  */
 
-/*
- * File descriptors for peer data exchange. If we reimplement with shared
- * memory, these will go away.
- */
+/* File descriptors for peer data exchange. */
 int send_write_fd = -1;
 int recv_read_fd = -1;
 
@@ -206,7 +214,7 @@ char *parse_ring_block = NULL;
 /*
  * Length of ring buffer (but note that due to using a magic buffer technique,
  * the parse ring block technically extends to twice the length of the buffer
- * itself
+ * itself).
  */
 ssize_t parse_ring_length = 0;
 
@@ -216,13 +224,10 @@ ssize_t parse_ring_read_loc = 0;
 /* Length of data left in the ring buffer. */
 ssize_t parse_ring_data_len = 0;
 
-/* Prepares the parsing ring buffer. */
+/* Prepares the parsing ring buffer. Aborts the program if this fails. */
 static void init_msg_ring(void);
 
-/*
- * Sends a message to the peer. Terminates the program if the message cannot be
- * sent.
- */
+/* Sends a message to the peer. Aborts the program if this fails. */
 #if defined(KLOAK)
 static void send_msg_to_peer(enum ptc_packet_type msg_type,
   ssize_t arg_count, ...);
@@ -244,15 +249,14 @@ static void *pop_ring_buffer_msg(enum ptc_packet_type *out_type,
 #endif
 
 /*
- * Reads new data from the peer into the ring buffer. Terminates the program if
- * something goes wrong in the process.
+ * Reads new data from the peer into the ring buffer. Aborts the program if
+ * this fails.
  */
 static void read_peer_data_to_ring_buffer(void);
 
 /*
- * Receives a message from the peer and validates it. Terminates the program if
- * the message is invalid for some reason. Returns NULL if there isn't a
- * message available yet.
+ * Receives a message from the peer and validates it. Aborts the program if a
+ * received message is invalid. Returns NULL if no message is available.
  */
 #if defined(KLOAK)
 static void *get_msg_from_peer(enum ctp_packet_type *out_type,
@@ -269,51 +273,46 @@ static void *get_msg_from_peer(enum ptc_packet_type *out_type,
 static void *safe_calloc(size_t nmemb, size_t size) {
   void *out_ptr = calloc(nmemb, size);
   if (out_ptr == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not allocate memory: %s\n", strerror(errno));
-    exit(1);
-  }
-  return out_ptr;
-}
-
-static char *safe_strdup(const char *s) {
-  char *out_ptr = strdup(s);
-  if (out_ptr == NULL) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not allocate memory: %s\n", strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not allocate memory");
   }
   return out_ptr;
 }
 
 static int safe_open(const char *pathname, int flags) {
-  int out_int = open(pathname, flags);
+  int out_int = -1;
+
+  assert(!(flags & O_CREAT));
+  out_int = open(pathname, flags);
   if (out_int == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not open file '%s': %s\n", pathname,
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not open file '%s'", pathname);
   }
   return out_int;
 }
 
 static void read_random(char *buf, ssize_t len) {
+  ssize_t total_read_len = 0;
+  ssize_t current_read_len = 0;
+
   assert(len >= 0);
   assert(buf != NULL);
 
-  if (read(FD_URANDOM, buf, (size_t)(len)) < len) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not read %ld byte(s) from /dev/urandom!\n", len);
-    exit(1);
+  while (total_read_len != len) {
+    current_read_len = read(FD_URANDOM, buf + (size_t)(total_read_len),
+      (size_t)(len - total_read_len));
+    if (current_read_len == -1) {
+      err(1, "FATAL ERROR: Unable to read from /dev/urandom");
+    }
+    if (current_read_len == 0) {
+      err(1, "FATAL ERROR: Unexpected EOF while reading from /dev/urandom");
+    }
+    total_read_len += current_read_len;
+    assert(total_read_len <= len);
   }
 }
 
-static void safe_close(int fd) {
-  int rslt = close(fd);
-  if (rslt == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not close a file: %s\n", strerror(errno));
-    exit(1);
+static void safe_close(int fd, const char *fileinfo) {
+  if (close(fd) == -1) {
+    err(1, "FATAL ERROR: Could not close file '%s'", fileinfo);
   }
 }
 
@@ -327,18 +326,10 @@ static void move_fd(int orig_fd, int new_fd) {
 #pragma GCC diagnostic ignored "-Wanalyzer-fd-leak"
   if (dup2(orig_fd, new_fd) == -1) {
 #pragma GCC diagnostic pop
-    fprintf(stderr,
-      "FATAL ERROR: Could not assign fd during move: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not assign fd during move");
   }
 
-  if(close(orig_fd) == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not close original fd during move: %s\n",
-      strerror(errno));
-    exit(1);
-  }
+  safe_close(orig_fd, "Original fd during move");
 }
 
 /*
@@ -369,9 +360,8 @@ static char *vsgenprintf(int *out_len_ptr, const char *str, va_list ap) {
   rslt_len = vsnprintf(NULL, 0, str, extra_args);
   va_end(extra_args);
   if (rslt_len <= -1) {
-    fprintf(stderr,
-      "FATAL ERROR: String processing issue: %s\n", strerror(errno));
-    exit(1);
+    /* vsnprintf does not set errno. */
+    errx(1, "FATAL ERROR: String processing issue");
   }
   rslt_len++; /* for the terminating null byte */
   rslt = safe_calloc(1, (size_t)(rslt_len));
@@ -402,9 +392,9 @@ static ssize_t write_all(int fd, const void *buf, size_t count) {
   ssize_t current_write_len = 0;
   const char *char_buf = (const char *)(buf);
 
+  assert(count != 0);
   assert(count < SSIZE_MAX);
   while (total_write_len != (ssize_t)(count)) {
-    /* Note that pointer arithmetic on void * vars is allowed by GNU C. */
     current_write_len = write(fd, char_buf + total_write_len,
       (size_t)((ssize_t)(count) - total_write_len));
     if (current_write_len == -1) {
@@ -414,6 +404,7 @@ static ssize_t write_all(int fd, const void *buf, size_t count) {
       return -1;
     }
     total_write_len += current_write_len;
+    assert(total_write_len <= (ssize_t)(count));
   }
   return (ssize_t)(count);
 }
@@ -425,6 +416,33 @@ static void fill_with_rand_alphabetic(char *buf, ssize_t len) {
   assert(buf != NULL);
 
   for (ssize_t i = 0; i < len; i++) {
+    /*
+     * Getting a random number without modulo bias is hard and arguably not
+     * that valuable here, but we do it anyway to reduce the risk of
+     * collisions. The logic is:
+     *
+     * - read_random will give us a value between -128 and 127. We normalize
+     *   this to a value between 0 and 127, which is 128 possible combinations.
+     * - Simply taking this result modulo ALPHABET_LEN * 2 would bias the
+     *   result in favor of lower values, as the high end of randchar will wrap
+     *   around to the lower values but there aren't enough possible values at
+     *   the high end of randchar to wrap all the way to ALPHABET_LEN * 2 - 1.
+     * - To mitigate this, we calculate 128 mod (ALPHABET_LEN * 2) to get the
+     *   number of lower values that will suffer modulo bias, then subtract
+     *   that from 128 to get the number of values randchar can have that will
+     *   not cause modulo bias.
+     * - To avoid having to work with values larger than CHAR_MAX, we can get
+     *   away with using 127 instead of 128 in these calculations. The modulo
+     *   will be one smaller than it would be otherwise, but so will the number
+     *   it is being subtracted from. If our range of values and range of
+     *   desired values didn't suffer from modulo bias, this would result in a
+     *   chunk of high acceptable values being mistakenly treated as
+     *   unacceptable, but this is a mostly benign failure mode (only has a
+     *   performance impact) even in the worst case, and since there is modulo
+     *   bias being avoided here, that failure mode won't occur.
+     * - If randchar contains a value greater than or equal to this boundary,
+     *   we discard it. Otherwise, we use it.
+     */
     do {
       read_random(&randchar, 1);
       if (randchar == CHAR_MIN) {
@@ -432,7 +450,7 @@ static void fill_with_rand_alphabetic(char *buf, ssize_t len) {
       } else {
         randchar = (char)(abs(randchar));
       }
-    } while (randchar >= (CHAR_MAX - (CHAR_MAX % ALPHABET_LEN)));
+    } while (randchar >= (CHAR_MAX - (CHAR_MAX % (ALPHABET_LEN * 2))));
 
     randchar %= (ALPHABET_LEN * 2);
     if (randchar < ALPHABET_LEN) {
@@ -454,17 +472,17 @@ static int allocate_shm(ssize_t size) {
 
   assert(size >= 0);
   /*
-   * In a perfect world, we'd do the sizeof check here at compile time, but
-   * unfortunately that isn't possible.
+   * This could seemingly be written more efficiently as
+   * assert(size <= sizeof((off_t)(size))), but both gcc and clang are able
+   * to completely optimize the more complex variant of this out on 64-bit
+   * Intel-based platforms.
    */
   if (sizeof(off_t) == 4) {
     assert(size <= INT32_MAX);
   } else if (sizeof(off_t) == 8) {
     assert(size <= INT64_MAX);
   } else {
-    fprintf(stderr,
-      "FATAL ERROR: off_t is not 32-bit or 64-bit, cannot continue\n");
-    exit(1);
+    errx(1, "FATAL ERROR: off_t is not 32-bit or 64-bit");
   }
 
   do {
@@ -475,27 +493,23 @@ static int allocate_shm(ssize_t size) {
     --retries;
     fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd >= 0) {
-      shm_unlink(name);
+      if (shm_unlink(name) == -1) {
+        err(1, "FATAL ERROR: Could not shm_unlink '%s'", name);
+      }
       break;
     }
   } while (retries > 0 && errno == EEXIST);
 
   if (fd == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not create shared memory fd: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not create shared memory fd");
   }
 
   do {
     ret = ftruncate(fd, (off_t)(size));
   } while (ret < 0 && errno == EINTR);
   if (ret < 0) {
-    close(fd);
-    fprintf(stderr,
-      "FATAL ERROR: Could not allocate shared memory block: %s\n",
-      strerror(errno));
-    exit(1);
+    safe_close(fd, name);
+    err(1, "FATAL ERROR: Could not allocate shared memory block");
   }
 
   return fd;
@@ -511,41 +525,40 @@ static int allocate_shm(ssize_t size) {
  */
 static void init_msg_ring(void) {
   int page_size = getpagesize();
-  int shm_fd = 0;
+  int shm_fd = -1;
 
-  parse_ring_length = (ssize_t)(page_size) * (PARSE_RING_LEN / page_size);
-  if (parse_ring_length < PARSE_RING_LEN) {
-    parse_ring_length += page_size;
-  }
+  /*
+   * parse_ring_length is a multiple of page_size, rounded up to the nearest
+   * multiple.
+   */
+  parse_ring_length = (ssize_t)(page_size)
+    * ((PARSE_RING_LEN + ((ssize_t)(page_size) - 1))
+      / (ssize_t)(page_size));
 
   shm_fd = allocate_shm(parse_ring_length);
 
   parse_ring_block = mmap(NULL, 2 * (size_t)(parse_ring_length), PROT_NONE,
     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (parse_ring_block == MAP_FAILED) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not reserve memory mapping for parse ring: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not reserve memory mapping for parse ring");
   }
 
+  /*
+   * These two mappings MUST use MAP_SHARED. Even though they belong to the
+   * same process, MAP_PRIVATE is copy-on-write, which would make the two
+   * mappings effectively two distinct blocks of memory.
+   */
   if (mmap(parse_ring_block, (size_t)(parse_ring_length),
     PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, shm_fd, 0) == MAP_FAILED) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not map parse ring to first address: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not map parse ring to first address");
   }
 
   if (mmap(parse_ring_block + parse_ring_length, (size_t)(parse_ring_length),
     PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, shm_fd, 0) == MAP_FAILED) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not map parse ring to second address: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not map parse ring to second address");
   }
 
-  safe_close(shm_fd);
+  safe_close(shm_fd, "shm buffer fd");
 }
 
 #if defined(KLOAK)
@@ -572,29 +585,27 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
 #if defined(KLOAK)
   case PTC_PACKET_MAX_DELAY_CONFIG:
     assert(arg_count == 1);
-    msg_len = (ssize_t)(sizeof(enum ptc_packet_type))
-      + (ssize_t)(sizeof(int32_t));
+    msg_len = (ssize_t)(sizeof(msg_type)) + (ssize_t)(sizeof(int32_t));
     msg_buf = safe_calloc(1, (size_t)(msg_len));
 
     max_delay_ptr = va_arg(arg_list, int32_t *);
     assert(*max_delay_ptr >= 0);
 
-    memcpy(msg_buf, &msg_type, sizeof(enum ptc_packet_type));
-    msg_pos += (ssize_t)(sizeof(enum ptc_packet_type));
+    memcpy(msg_buf, &msg_type, sizeof(msg_type));
+    msg_pos += (ssize_t)(sizeof(msg_type));
     memcpy(msg_buf + msg_pos, max_delay_ptr, sizeof(int32_t));
     msg_pos += (ssize_t)(sizeof(int32_t));
     break;
 
   case PTC_PACKET_CURSOR_COLOR_CONFIG:
     assert(arg_count == 1);
-    msg_len = (ssize_t)(sizeof(enum ptc_packet_type))
-      + (ssize_t)(sizeof(uint32_t));
+    msg_len = (ssize_t)(sizeof(msg_type)) + (ssize_t)(sizeof(uint32_t));
     msg_buf = safe_calloc(1, (size_t)(msg_len));
 
     cursor_color_ptr = va_arg(arg_list, uint32_t *);
 
-    memcpy(msg_buf, &msg_type, sizeof(enum ptc_packet_type));
-    msg_pos += (ssize_t)(sizeof(enum ptc_packet_type));
+    memcpy(msg_buf, &msg_type, sizeof(msg_type));
+    msg_pos += (ssize_t)(sizeof(msg_type));
     memcpy(msg_buf + msg_pos, cursor_color_ptr, sizeof(uint32_t));
     msg_pos += (ssize_t)(sizeof(uint32_t));
     break;
@@ -603,14 +614,13 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
   case PTC_PACKET_CURSOR_ABS_EVENT:
   case PTC_PACKET_SCROLL_EVENT:
     assert(arg_count == 1);
-    msg_len = (ssize_t)(sizeof(enum ptc_packet_type))
-      + ((ssize_t)(sizeof(double)) * 2);
+    msg_len = (ssize_t)(sizeof(msg_type)) + ((ssize_t)(sizeof(double)) * 2);
     msg_buf = safe_calloc(1, (size_t)(msg_len));
 
     double_coord_ptr = va_arg(arg_list, struct double_coord *);
 
-    memcpy(msg_buf, &msg_type, sizeof(enum ptc_packet_type));
-    msg_pos += (ssize_t)(sizeof(enum ptc_packet_type));
+    memcpy(msg_buf, &msg_type, sizeof(msg_type));
+    msg_pos += (ssize_t)(sizeof(msg_type));
     memcpy(msg_buf + msg_pos, &double_coord_ptr->x, sizeof(double));
     msg_pos += (ssize_t)(sizeof(double));
     memcpy(msg_buf + msg_pos, &double_coord_ptr->y, sizeof(double));
@@ -620,14 +630,14 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
   case PTC_PACKET_CLICK_EVENT:
   case PTC_PACKET_KB_EVENT:
     assert(arg_count == 1);
-    msg_len = (ssize_t)(sizeof(enum ptc_packet_type))
-      + (ssize_t)(sizeof(uint32_t)) + (ssize_t)(sizeof(uint8_t));
+    msg_len = (ssize_t)(sizeof(msg_type)) + (ssize_t)(sizeof(uint32_t))
+      + (ssize_t)(sizeof(uint8_t));
     msg_buf = safe_calloc(1, (size_t)(msg_len));
 
     button_event_ptr = va_arg(arg_list, struct button_event *);
 
-    memcpy(msg_buf, &msg_type, sizeof(enum ptc_packet_type));
-    msg_pos += (ssize_t)(sizeof(enum ptc_packet_type));
+    memcpy(msg_buf, &msg_type, sizeof(msg_type));
+    msg_pos += (ssize_t)(sizeof(msg_type));
     memcpy(msg_buf + msg_pos, &button_event_ptr->button_code,
       sizeof(uint32_t));
     msg_pos += (ssize_t)(sizeof(uint32_t));
@@ -640,32 +650,37 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
       sizeof(uint8_t));
     msg_pos += (ssize_t)(sizeof(uint8_t));
     break;
+
 #elif defined(KLOAKWL)
   case CTP_PACKET_INIT_ACK:
   case CTP_PACKET_WAYLAND_LOST:
     assert(arg_count == 0);
-    msg_len = (ssize_t)(sizeof(enum ctp_packet_type));
+
+    msg_len = (ssize_t)(sizeof(msg_type));
     msg_buf = safe_calloc(1, (size_t)(msg_len));
-    memcpy(msg_buf, &msg_type, sizeof(enum ctp_packet_type));
-    msg_pos += (ssize_t)(sizeof(enum ctp_packet_type));
+
+    memcpy(msg_buf, &msg_type, sizeof(msg_type));
+    msg_pos += (ssize_t)(sizeof(msg_type));
     break;
 
   case CTP_PACKET_POINTER_SPACE_DATA:
     assert(arg_count == 1);
 
-    msg_len = (ssize_t)(sizeof(enum ctp_packet_type))
-      + (ssize_t)(sizeof(int32_t) * 2);
+    msg_len = (ssize_t)(sizeof(msg_type)) + (ssize_t)(sizeof(int32_t) * 2);
     msg_buf = safe_calloc(1, (size_t)(msg_len));
 
     coord_ptr = va_arg(arg_list, struct coord *);
+    assert(coord_ptr->x >= 0);
+    assert(coord_ptr->y >= 0);
 
-    memcpy(msg_buf, &msg_type, sizeof(enum ctp_packet_type));
-    msg_pos += (ssize_t)(sizeof(enum ctp_packet_type));
+    memcpy(msg_buf, &msg_type, sizeof(msg_type));
+    msg_pos += (ssize_t)(sizeof(msg_type));
     memcpy(msg_buf + msg_pos, &coord_ptr->x, sizeof(int32_t));
     msg_pos += (ssize_t)(sizeof(int32_t));
     memcpy(msg_buf + msg_pos, &coord_ptr->y, sizeof(int32_t));
     msg_pos += (ssize_t)(sizeof(int32_t));
     break;
+
 #endif
   default:
     assert(false);
@@ -676,9 +691,7 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
   va_end(arg_list);
 
   if (write_all(send_write_fd, msg_buf, (size_t)(msg_len)) == -1) {
-    fprintf(stderr, "FATAL ERROR: Could not send message to peer: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not send message to peer");
   }
   free(msg_buf);
 }
@@ -686,23 +699,20 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
 #if defined(KLOAK)
 static void *pop_ring_buffer_msg(enum ctp_packet_type *out_type,
   ssize_t *out_obj_count) {
+  enum ctp_packet_type packet_type = 0;
+  struct coord *coord_ptr = NULL;
 #elif defined(KLOAKWL)
 static void *pop_ring_buffer_msg(enum ptc_packet_type *out_type,
   ssize_t *out_obj_count) {
-#endif
-  void *out_ptr = NULL;
-  ssize_t tmp_parse_ring_read_loc = parse_ring_read_loc;
-  ssize_t tmp_parse_ring_data_len = parse_ring_data_len;
-#if defined(KLOAK)
-  enum ctp_packet_type packet_type;
-  struct coord *coord_ptr = NULL;
-#elif defined(KLOAKWL)
-  enum ptc_packet_type packet_type;
+  enum ptc_packet_type packet_type = 0;
   struct double_coord *double_coord_ptr = NULL;
   struct button_event *button_event_ptr = NULL;
   uint8_t is_pressed_int = 0;
 #endif
   ssize_t obj_count = 0;
+  void *out_ptr = NULL;
+  ssize_t tmp_parse_ring_read_loc = parse_ring_read_loc;
+  ssize_t tmp_parse_ring_data_len = parse_ring_data_len;
 
   *out_type = 0;
   if (out_obj_count != NULL) {
@@ -841,9 +851,7 @@ static void read_peer_data_to_ring_buffer(void) {
     return;
   }
   if (ioctl(recv_read_fd, FIONREAD, &pipe_bytes_avail) == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not check bytes in pipe: %s\n", strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not check bytes in pipe");
   }
   if (pipe_bytes_avail <= 0) {
     return;
@@ -855,13 +863,9 @@ static void read_peer_data_to_ring_buffer(void) {
       (size_t)(capacity));
   } while (read_len == -1 && errno == EINTR);
   if (read_len == -1) {
-    fprintf(stderr,
-      "FATAL ERROR: Could not read data from peer: %s\n",
-      strerror(errno));
-    exit(1);
+    err(1, "FATAL ERROR: Could not read data from peer");
   } else if (read_len == 0) {
-    fprintf(stderr, "INFO: Peer disconnected, exiting.\n");
-    exit(0);
+    errx(0, "INFO: Peer disconnected, exiting");
   }
 
   parse_ring_data_len += read_len;
