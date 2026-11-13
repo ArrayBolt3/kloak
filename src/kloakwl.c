@@ -968,10 +968,6 @@ static void layer_surface_configure(__attribute__((unused)) void *data,
   if (!layer->shm_pool) {
     err(1, "FATAL ERROR: Could not get wl_shm_pool");
   }
-  /*
-   * TODO: This might not be safe, the compositor might not have mmapped the
-   * fd yet.
-   */
   safe_close(shm_fd, "Wayland pixbuf shm");
 
   zeroed_region = wl_compositor_create_region(state.compositor);
@@ -1659,12 +1655,7 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
        * compositor global space. Move the cursor back to where it was and
        * stop it. Technically we should also be doing this if two different
        * directions both work to get us back on-screen, but we don't currently
-       * and the one-pixel shift resulting from this likely isn't worth caring
-       * about.
-       *
-       * TODO: Is there a reason to care about this one-pixel shift? Does its
-       * existence leak information an attacker wouldn't be able to get
-       * otherwise?
+       * and the one-pixel shift resulting from this isn't worth caring about.
        */
       end.x = prev_trav_coord.x;
       end.y = prev_trav_coord.y;
