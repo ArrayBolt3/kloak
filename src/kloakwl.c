@@ -1091,7 +1091,9 @@ static int open_wl_sock(void) {
   connect_success = connect(wl_sock_fd,
     (const struct sockaddr *)(&wl_sockaddr), sizeof(wl_sockaddr));
   if (connect_success == -1) {
-    err(1, "FATAL ERROR: Could not connect to Wayland compositor");
+    warnx("WARNING: Could not connect to Wayland compositor, exiting");
+    send_msg_to_peer(CTP_PACKET_WAYLAND_LOST, 0);
+    exit(0);
   }
 
   if (should_free_wl_sock_path) {
