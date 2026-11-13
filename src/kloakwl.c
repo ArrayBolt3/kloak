@@ -376,6 +376,8 @@ struct coord traverse_line(struct coord start, struct coord end,
   static int32_t err_2x_val = 0;
   static int32_t last_pos = 0;
   static int32_t max_pos = 0;
+  static int32_t max_x = 0;
+  static int32_t max_y = 0;
   int32_t i = 0;
 
   assert(pos >= 0);
@@ -388,8 +390,12 @@ struct coord traverse_line(struct coord start, struct coord end,
   if (last_start.x != start.x || last_start.y != start.y
     || last_end.x != end.x || last_end.y != end.y || pos < last_pos) {
     work_coord = start;
-    err_adj.x = abs(end.x - start.x);
-    err_adj.y = -abs(end.y - start.y);
+    err_adj.x = end.x - start.x;
+    assert(err_adj.x != INT32_MIN);
+    err_adj.x = abs(err_adj.x);
+    err_adj.y = end.y - start.y;
+    assert(err_adj.y != INT32_MIN);
+    err_adj.y = -abs(err_adj.y);
     direct_adj.x = start.x < end.x ? 1 : -1;
     direct_adj.y = start.y < end.y ? 1 : -1;
     err_val = err_adj.x + err_adj.y;
@@ -397,7 +403,13 @@ struct coord traverse_line(struct coord start, struct coord end,
     last_start = start;
     last_end = end;
     last_pos = 0;
-    max_pos = MAX(abs(end.x - start.x), abs(end.y - start.y));
+    max_x = end.x - start.x;
+    assert(max_x != INT32_MIN);
+    max_x = abs(max_x);
+    max_y = end.y - start.y;
+    assert(max_y != INT32_MIN);
+    max_y = abs(max_y);
+    max_pos = MAX(max_x, max_y);
   }
 
   if (pos > max_pos) {
@@ -881,43 +893,22 @@ static void layer_surface_configure(__attribute__((unused)) void *data,
     if (state.layers[i]) {
       if (state.layers[i]->layer_surface == layer_surface) {
         layer = state.layers[i];
-        /*
-         * The layer might already be initialized (if, for instance, one of the
-         * screens was resized), so free any previously allocated resources.
-         */
-        if (layer->pixbuf != NULL) {
-          if (munmap(layer->pixbuf,
-            (size_t)(layer->size) * MAX_UNRELEASED_FRAMES) == -1) {
-            assert(false);
-          }
-          layer->pixbuf = NULL;
-        }
-        if (layer->shm_pool != NULL) {
-          /*
-           * This is safe even if some buffers in this pool haven't been freed
-           * yet, as "The mmapped memory will be released when all buffers that
-           * have been created from this pool are gone." See:
-           * https://wayland.app/protocols/wayland#wl_shm_pool:request:destroy
-           */
-          wl_shm_pool_destroy(layer->shm_pool);
-          layer->shm_pool = NULL;
-        }
-        /*
-         * Use the pending output geometry here, as it likely contains an
-         * up-to-date size for the display in the event we aren't given a size
-         * hint by the compositor. Of course, the compositor *could* send us
-         * a layer surface configure event without a size hint and without
-         * telling us the size of the screen yet, but that would be a
-         * compositor bug, and in such a scenario the virtual cursor just won't
-         * be drawn when the mouse moves into an area we didn't allocate layer
-         * space for.
-         */
-        geometry = state.pending_output_geometries[i];
         break;
       }
     }
   }
   assert(layer != NULL);
+
+  /*
+   * Use the pending output geometry here, as it likely contains an up-to-date
+   * size for the display in the event we aren't given a size hint by the
+   * compositor. Of course, the compositor *could* send us a layer surface
+   * configure event without a size hint and without telling us the size of the
+   * screen yet, but that would be a compositor bug, and in such a scenario the
+   * virtual cursor just won't be drawn when the mouse moves into an area we
+   * didn't allocate layer space for.
+   */
+  geometry = state.pending_output_geometries[i];
   assert(geometry != NULL);
   if (width == 0) {
     if (geometry->width <= 0) {
@@ -938,6 +929,29 @@ static void layer_surface_configure(__attribute__((unused)) void *data,
   assert(height <= INT32_MAX);
   assert(width > 0);
   assert(height > 0);
+
+  /*
+   * The layer might already be initialized (if, for instance, one of the
+   * screens was resized), so free any previously allocated resources.
+   */
+  if (layer->pixbuf != NULL) {
+    if (munmap(layer->pixbuf,
+      (size_t)(layer->size) * MAX_UNRELEASED_FRAMES) == -1) {
+      assert(false);
+    }
+    layer->pixbuf = NULL;
+  }
+  if (layer->shm_pool != NULL) {
+    /*
+     * This is safe even if some buffers in this pool haven't been freed yet,
+     * as "The mmapped memory will be released when all buffers that have been
+     * created from this pool are gone." See:
+     * https://wayland.app/protocols/wayland#wl_shm_pool:request:destroy
+     */
+    wl_shm_pool_destroy(layer->shm_pool);
+    layer->shm_pool = NULL;
+  }
+
   layer->width = (int32_t)(width);
   layer->height = (int32_t)(height);
   layer->stride = (int32_t)(width * 4);
@@ -1047,13 +1061,15 @@ static int open_wl_sock(void) {
     const char *xdg_runtime_dir_env = getenv("XDG_RUNTIME_DIR");
 
     if (xdg_runtime_dir_env == NULL) {
-      warnx("WARNING: Wayland socket path is relative and XDG_RUNTIME_DIR is not set");
-      xdg_runtime_dir_env = "/run/user/1000";
+      warnx("WARNING: Wayland socket path is relative and XDG_RUNTIME_DIR is not set, exiting");
+      send_msg_to_peer(CTP_PACKET_WAYLAND_LOST, 0);
+      exit(0);
     }
 
     if (xdg_runtime_dir_env[0] != '/') {
-      warnx("WARNING: Wayland socket path is relative and XDG_RUNTIME_DIR is also relative");
-      xdg_runtime_dir_env = "/run/user/1000";
+      warnx("WARNING: Wayland socket path is relative and XDG_RUNTIME_DIR is also relative, exiting");
+      send_msg_to_peer(CTP_PACKET_WAYLAND_LOST, 0);
+      exit(0);
     }
 
     wl_sock_path = sgenprintf(NULL, "%s/%s", xdg_runtime_dir_env,
@@ -2378,9 +2394,19 @@ static void applayer_wayland_init(void) {
   if (wl_seat_add_listener(state.seat, &seat_listener, NULL) == -1) {
     assert(false);
   }
-  wl_display_roundtrip_safe(state.display);
+
+  /* Ensure we have both a keyboard and keymap before continuing. */
+  for (i = 0; i < MAX_INIT_ATTEMPTS; i++) {
+    wl_display_roundtrip_safe(state.display);
+    if (!state.kb || !state.xkb_state) {
+      continue;
+    }
+  }
   if (!state.kb) {
     errx(1, "FATAL ERROR: No wl_keyboard object from compositor");
+  }
+  if (!state.xkb_state) {
+    errx(1, "FATAL ERROR: No keymap from compositor");
   }
 }
 

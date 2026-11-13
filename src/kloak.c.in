@@ -138,7 +138,7 @@ static struct timespec ms_to_timespec(int64_t ms) {
   struct timespec ts = { 0 };
   assert(ms >= 0);
   ts.tv_sec = (time_t)(ms / 1000);
-  ts.tv_nsec = (ms % 1000) * 1000000;
+  ts.tv_nsec = (uint32_t)((ms % 1000) * 1000000);
   return ts;
 }
 
@@ -447,7 +447,7 @@ static char *parse_inotify_events(char *inotify_buf, ssize_t buf_len,
       *buf_pos_ptr = -1;
       return NULL;
     }
-    /* No need to check if ie->len fits in struct_len, uint32_t is too small */
+    assert(ie->len < SSIZE_MAX - sizeof(struct inotify_event));
     struct_len = ((ssize_t)(sizeof(struct inotify_event))
       + (ssize_t)(ie->len));
     if (struct_len > rem_len) {
@@ -906,6 +906,8 @@ static void applayer_kloakwl_init(void) {
     /* child */
     char *kloakwl_path_dup = safe_strdup(KLOAKWL_PATH);
     char *child_argv[] = { kloakwl_path_dup, NULL };
+    safe_close(ctp_pipe[0], "ctp_pipe read end");
+    safe_close(ptc_pipe[1], "ptc_pipe write end");
     move_fd(ctp_pipe[1], 1);
     move_fd(ptc_pipe[0], 0);
     if (execve(KLOAKWL_PATH, child_argv, environ) == -1) {
@@ -1044,8 +1046,12 @@ static void applayer_poll_init(void) {
   ev_fds[0].events = POLLIN;
   ev_fds[1].fd = inotify_fd;
   ev_fds[1].events = POLLIN;
-  ev_fds[2].fd = recv_read_fd;
-  ev_fds[2].events = POLLIN;
+  if (wl_connect_success) {
+    ev_fds[2].fd = recv_read_fd;
+    ev_fds[2].events = POLLIN;
+  } else {
+    ev_fds[2].fd = -1;
+  }
 }
 
 static void parse_cli_args(int argc, char **argv) {
