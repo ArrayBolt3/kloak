@@ -1568,6 +1568,7 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   struct coord prev_trav_coord = { 0 };
   struct coord trav_coord = { 0 };
   struct screen_local_coord trav_scr_coord = EMPTY_SCREEN_LOCAL_COORD;
+  bool cursor_adjusted = false;
 
   if (!isfinite(*cursor_x_ptr) || !isfinite(*cursor_y_ptr)) {
     *cursor_x_ptr = prev_cursor_x_pos;
@@ -1576,15 +1577,19 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
   }
   if (*cursor_x_ptr < INT32_MIN) {
     *cursor_x_ptr = INT32_MIN;
+    cursor_adjusted = true;
   }
   if (*cursor_x_ptr > INT32_MAX) {
     *cursor_x_ptr = INT32_MAX;
+    cursor_adjusted = true;
   }
   if (*cursor_y_ptr < INT32_MIN) {
     *cursor_y_ptr = INT32_MIN;
+    cursor_adjusted = true;
   }
   if (*cursor_y_ptr > INT32_MAX) {
     *cursor_y_ptr = INT32_MAX;
+    cursor_adjusted = true;
   }
   start.x = (int32_t)(prev_cursor_x_pos);
   start.y = (int32_t)(prev_cursor_y_pos);
@@ -1602,6 +1607,7 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
     trav_scr_coord = abs_coord_to_screen_local_coord(trav_coord.x,
       trav_coord.y);
     if (trav_scr_coord.output_idx < 0) {
+      cursor_adjusted = true;
       /*
        * Figure out what direction we moved when we went off screen, and move
        * move backwards in that direction, but in only one dimension.
@@ -1663,8 +1669,10 @@ static void make_virtual_cursor_pos_sane(double prev_cursor_x_pos,
     }
     prev_trav_coord = trav_coord;
   }
-  *(cursor_x_ptr) = end.x;
-  *(cursor_y_ptr) = end.y;
+  if (cursor_adjusted) {
+    *(cursor_x_ptr) = end.x;
+    *(cursor_y_ptr) = end.y;
+  }
 }
 
 static struct input_packet *find_merge_target_packet(
@@ -2223,9 +2231,9 @@ static void applayer_sandbox_init(void) {
    * by root.
    */
   change_dumpable(true);
-  write_to_file("/proc/self/uid_map", "0 %d 1\n", pw_data->pw_uid);
+  write_to_file("/proc/self/uid_map", "0 %lld 1\n", (int64_t)(pw_data->pw_uid));
   write_to_file("/proc/self/setgroups", "deny\n");
-  write_to_file("/proc/self/gid_map", "0 %d 1\n", gr_data->gr_gid);
+  write_to_file("/proc/self/gid_map", "0 %lld 1\n", (int64_t)(gr_data->gr_gid));
   change_dumpable(false);
 
   /*
@@ -2437,12 +2445,11 @@ int main(int argc, char **argv) {
   init_fd_urandom();
   applayer_config_init();
   applayer_wlsock_init();
+#ifdef NOSANDBOX
+  (void) applayer_sandbox_init;
+#else
   applayer_sandbox_init();
-  /*
-   * Before running under Valgrind, comment out the above line and uncomment
-   * the one below. The sandbox does not allow Valgrind to function currently.
-   */
-  /*(void) applayer_sandbox_init;*/
+#endif
   applayer_wayland_init();
   applayer_poll_init();
 

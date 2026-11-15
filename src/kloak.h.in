@@ -55,6 +55,15 @@ struct key_name_value {
 };
 
 /*
+ * Defines an evdev event with a little less detail and memory use than
+ * struct input_event.
+ */
+struct input_event_def {
+  uint16_t type;
+  uint16_t code;
+};
+
+/*
  * Defines a libinput device on the system by its device pointer and file
  * name. Intended for use in a doubly-linked list.
  *
@@ -137,6 +146,15 @@ static bool parse_uint_arg(const char *val, int base, uint32_t max_val,
 
 /* Sleeps for the specified number of milliseconds. Returns -1 on failure. */
 static int32_t sleep_ms(int64_t ms);
+
+/*
+ * Checks if a specific combination of event type and code is whitelisted as
+ * safe to allow a compositor to read directly.
+ */
+static bool event_is_whitelisted(uint16_t type, uint16_t code);
+
+/* Checks if an input device supports events beyond the whitelisted set. */
+static bool device_supports_sensitive_events(int fd);
 
 /*****************************************/
 /* libinput handling function prototypes */

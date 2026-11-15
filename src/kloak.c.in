@@ -97,6 +97,29 @@ static struct key_name_value key_table[] = {
   @EV_KEY_TABLE@
 };
 
+static struct input_event_def whitelisted_env_list[] = {
+  { .type = EV_KEY, .code = KEY_POWER },
+  { .type = EV_KEY, .code = KEY_WAKEUP },
+  { .type = EV_KEY, .code = KEY_SLEEP },
+  { .type = EV_SW, .code = SW_LID },
+  { .type = EV_SW, .code = SW_LINEOUT_INSERT },
+  { .type = EV_SW, .code = SW_VIDEOOUT_INSERT },
+  { .type = EV_SW, .code = SW_MICROPHONE_INSERT },
+  { .type = EV_SW, .code = SW_HEADPHONE_INSERT },
+  { .type = EV_SW, .code = SW_TABLET_MODE },
+  { .type = EV_SW, .code = SW_RFKILL_ALL },
+  { .type = EV_SW, .code = SW_DOCK },
+  { .type = EV_SW, .code = SW_JACK_PHYSICAL_INSERT },
+  { .type = EV_SW, .code = SW_CAMERA_LENS_COVER },
+  { .type = EV_SW, .code = SW_KEYPAD_SLIDE },
+  { .type = EV_SW, .code = SW_ROTATE_LOCK },
+  { .type = EV_SW, .code = SW_LINEIN_INSERT },
+  { .type = EV_SW, .code = SW_MUTE_DEVICE },
+  { .type = EV_SW, .code = SW_PEN_INSERTED },
+  { .type = EV_SW, .code = SW_MACHINE_COVER },
+  { .type = EV_CNT, .code = 0 },
+};
+
 /*********************/
 /* Utility functions */
 /*********************/
@@ -311,6 +334,79 @@ static int32_t sleep_ms(int64_t ms) {
   return 0;
 }
 
+static bool event_is_whitelisted(uint16_t type, uint16_t code) {
+  for (ssize_t i = 0; whitelisted_env_list[i].type != EV_CNT; i++) {
+    if (whitelisted_env_list[i].type == type
+      && whitelisted_env_list[i].code == code) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool device_supports_sensitive_events(int fd) {
+  struct libevdev *dev = NULL;
+  int ret = 0;
+  uint16_t i = 0;
+
+  ret = libevdev_new_from_fd(fd, &dev);
+  if (ret < 0) {
+    errno = -ret;
+    warn("WARNING: Could not scan device for sensitive events");
+    return true;
+  }
+
+  /* EV_SYN is considered always safe. */
+
+  if (libevdev_has_event_type(dev, EV_KEY)) {
+    for (i = 0; i < KEY_CNT; i++) {
+      if (libevdev_has_event_code(dev, EV_KEY, i)
+        && !event_is_whitelisted(EV_KEY, i)) {
+        return true;
+      }
+    }
+  }
+
+  if (libevdev_has_event_type(dev, EV_REL)) {
+    return true;
+  }
+
+  if (libevdev_has_event_type(dev, EV_ABS)) {
+    return true;
+  }
+
+  if (libevdev_has_event_type(dev, EV_MSC)) {
+    /* TODO: Are there some EV_MSC events we'd like to allow through? */
+    return true;
+  }
+
+  if (libevdev_has_event_type(dev, EV_SW)) {
+    for (i = 0; i < SW_CNT; i++) {
+      if (libevdev_has_event_code(dev, EV_SW, i)
+        && !event_is_whitelisted(EV_SW, i)) {
+        return true;
+      }
+    }
+  }
+
+  /* EV_LED is considered always safe. */
+
+  /* EV_SND is considered always safe. */
+
+  /* EV_REP is considered always safe. */
+
+  /* EF_FF_STATUS doesn't seem to be an event type. */
+
+  /* Any hitherto unknown event types are considered sensitive. */
+  for (i = EV_FF_STATUS; i < EV_CNT; i++) {
+    if (libevdev_has_event_type(dev, i)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /*******************************/
 /* libinput handling functions */
 /*******************************/
@@ -320,7 +416,7 @@ static int li_open_restricted(const char *path, int flags,
   int fd = safe_open(path, flags | O_CLOEXEC);
   int one = 1;
 
-  if (wl_connect_success) {
+  if (wl_connect_success && device_supports_sensitive_events(fd)) {
     if (ioctl(fd, EVIOCGRAB, &one) < 0) {
       err(1, "FATAL ERROR: Could not grab evdev device '%s'", path);
     }
@@ -977,6 +1073,13 @@ static void applayer_kloakwl_init(void) {
     }
     break;
   }
+
+#ifndef NOSANDBOX
+  /* Reap the intermediate child process. */
+  if (waitpid(child_pid, NULL, 0) == -1) {
+    err(1, "FATAL ERROR: Could not wait for intermediate process to die");
+  }
+#endif
 }
 
 static void applayer_inotify_init(void) {

@@ -578,6 +578,8 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
   ssize_t msg_len = 0;
   ssize_t msg_pos = 0;
   va_list arg_list;
+  static int write_pipe_size = -1;
+  int write_pipe_content_len = -1;
 
   va_start(arg_list, arg_count);
 
@@ -689,6 +691,26 @@ static void send_msg_to_peer(enum ctp_packet_type msg_type,
   assert(msg_pos == msg_len);
   assert(msg_len > 0);
   va_end(arg_list);
+
+  for (int8_t block_test = 0; ; block_test++) {
+    if (write_pipe_size == -1) {
+      write_pipe_size = fcntl(send_write_fd, F_GETPIPE_SZ);
+      if (write_pipe_size == -1) {
+        err(1, "FATAL ERROR: Could not get pipe size");
+      }
+    }
+    if (ioctl(send_write_fd, FIONREAD, &write_pipe_content_len) == -1) {
+      err(1, "FATAL ERROR: Could not get count of bytes in pipe");
+    }
+    if (msg_len <= (ssize_t)(write_pipe_size - write_pipe_content_len)) {
+      break;
+    }
+    if (block_test == 1) {
+      errx(1, "FATAL ERROR: Peer stopped reading messages");
+    }
+    /* Give the peer a bit of time to catch up */
+    sleep(1);
+  }
 
   if (write_all(send_write_fd, msg_buf, (size_t)(msg_len)) == -1) {
     err(1, "FATAL ERROR: Could not send message to peer");
