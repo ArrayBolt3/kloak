@@ -97,7 +97,7 @@ static struct key_name_value key_table[] = {
   @EV_KEY_TABLE@
 };
 
-static struct input_event_def whitelisted_env_list[] = {
+static struct input_event_def whitelisted_ev_list[] = {
   { .type = EV_KEY, .code = KEY_POWER },
   { .type = EV_KEY, .code = KEY_WAKEUP },
   { .type = EV_KEY, .code = KEY_SLEEP },
@@ -335,9 +335,9 @@ static int32_t sleep_ms(int64_t ms) {
 }
 
 static bool event_is_whitelisted(uint16_t type, uint16_t code) {
-  for (ssize_t i = 0; whitelisted_env_list[i].type != EV_CNT; i++) {
-    if (whitelisted_env_list[i].type == type
-      && whitelisted_env_list[i].code == code) {
+  for (ssize_t i = 0; whitelisted_ev_list[i].type != EV_CNT; i++) {
+    if (whitelisted_ev_list[i].type == type
+      && whitelisted_ev_list[i].code == code) {
       return true;
     }
   }
@@ -351,7 +351,11 @@ static bool device_supports_sensitive_events(int fd) {
 
   ret = libevdev_new_from_fd(fd, &dev);
   if (ret < 0) {
-    errno = -ret;
+    if (ret == INT32_MIN) {
+      ret = ERANGE;
+    } else {
+      errno = -ret;
+    }
     warn("WARNING: Could not scan device for sensitive events");
     return true;
   }
