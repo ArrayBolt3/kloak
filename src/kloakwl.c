@@ -634,6 +634,10 @@ static void seat_handle_capabilities(__attribute__((unused)) void *data,
 
   state.seat_caps = capabilities;
   if (capabilities & WL_SEAT_CAPABILITY_KEYBOARD) {
+    if (state.kb != NULL) {
+      wl_keyboard_release(state.kb);
+      state.kb = NULL;
+    }
     state.kb = wl_seat_get_keyboard(seat);
     if (!state.kb) {
       err(1, "FATAL ERROR: Could not get wl_keyboard");
@@ -2172,7 +2176,14 @@ static void applayer_sandbox_init(void) {
     }
     err(1, "FATAL ERROR: Could not get user information for '" SANDBOX_DEDICATED_USER "'");
   }
+  /*
+   * Asserts are defense-in-depth against theoretically possible pathological
+   * data types for pw_uid and gr_gid.
+   */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wtype-limits"
   assert(pw_data->pw_uid >= 0);
+#pragma GCC diagnostic pop
   if (pw_data->pw_uid == 0) {
     errx(1, "FATAL ERROR: '" SANDBOX_DEDICATED_USER "' UID is 0 (root), refusing to continue");
   }
@@ -2184,7 +2195,10 @@ static void applayer_sandbox_init(void) {
     }
     err(1, "FATAL ERROR: Could not get group information for '" SANDBOX_DEDICATED_USER "'");
   }
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wtype-limits"
   assert(gr_data->gr_gid >= 0);
+#pragma GCC diagnostic pop
   if (gr_data->gr_gid == 0) {
     errx(1, "FATAL ERROR: '" SANDBOX_DEDICATED_USER "' GID is 0 (root), refusing to continue");
   }

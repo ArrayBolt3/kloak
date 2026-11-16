@@ -359,6 +359,7 @@ static bool device_supports_sensitive_events(int fd) {
     warn("WARNING: Could not scan device for sensitive events");
     return true;
   }
+  assert(dev != NULL);
 
   /* EV_SYN is considered always safe. */
 
@@ -366,29 +367,29 @@ static bool device_supports_sensitive_events(int fd) {
     for (i = 0; i < KEY_CNT; i++) {
       if (libevdev_has_event_code(dev, EV_KEY, i)
         && !event_is_whitelisted(EV_KEY, i)) {
-        return true;
+        goto true_exit;
       }
     }
   }
 
   if (libevdev_has_event_type(dev, EV_REL)) {
-    return true;
+    goto true_exit;
   }
 
   if (libevdev_has_event_type(dev, EV_ABS)) {
-    return true;
+    goto true_exit;
   }
 
   if (libevdev_has_event_type(dev, EV_MSC)) {
     /* TODO: Are there some EV_MSC events we'd like to allow through? */
-    return true;
+    goto true_exit;
   }
 
   if (libevdev_has_event_type(dev, EV_SW)) {
     for (i = 0; i < SW_CNT; i++) {
       if (libevdev_has_event_code(dev, EV_SW, i)
         && !event_is_whitelisted(EV_SW, i)) {
-        return true;
+        goto true_exit;
       }
     }
   }
@@ -404,11 +405,16 @@ static bool device_supports_sensitive_events(int fd) {
   /* Any hitherto unknown event types are considered sensitive. */
   for (i = EV_FF_STATUS; i < EV_CNT; i++) {
     if (libevdev_has_event_type(dev, i)) {
-      return true;
+      goto true_exit;
     }
   }
 
+  libevdev_free(dev);
   return false;
+
+true_exit:
+  libevdev_free(dev);
+  return true;
 }
 
 /*******************************/
